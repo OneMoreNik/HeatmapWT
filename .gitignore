@@ -1,0 +1,10 @@
+# Replays and generated data stay local
+replays/
+*.wrpl
+data/
+*.parquet
+*.duckdb
+
+.DS_Store
+__pycache__/
+.venv/
