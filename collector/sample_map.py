@@ -35,6 +35,9 @@ from pathlib import Path
 HOST = "localhost"
 PORT = 8111
 
+# How often to re-read map_info while recording, in seconds.
+INFO_INTERVAL = 5.0
+
 FIELDS = [
     "t", "frame", "idx", "type", "icon", "color",
     "x", "y", "dx", "dy", "sx", "sy", "ex", "ey",
@@ -103,10 +106,17 @@ class WorldMapping:
         self.usable = len(self.min) >= 2 and len(self.max) >= 2
 
     def to_world(self, x, y):
+        """Map fraction -> world metres.
+
+        The y fraction runs top-down while world Z runs bottom-up, so y is
+        measured from map_max, not map_min. Verified against Berlin's three
+        Domination capture points: the mission blk puts them at Z 1118.7,
+        1140.5 and 1115.2, and this returns 1119, 1140 and 1115.
+        """
         if not self.usable or x is None or y is None:
             return None, None
         return (round(self.min[0] + x * (self.max[0] - self.min[0]), 2),
-                round(self.min[1] + y * (self.max[1] - self.min[1]), 2))
+                round(self.max[1] - y * (self.max[1] - self.min[1]), 2))
 
 
 def row_for(obj: dict, mapping: WorldMapping, t: float, frame: int, idx: int) -> dict:
@@ -184,16 +194,24 @@ def record(out_dir: Path, label: str, hz: float) -> None:
     print(f"polling localhost:{PORT} at {hz:g} Hz. Ctrl-C to stop.")
     print("waiting for a map...")
 
+    info_checked = 0.0
+    info = None
     try:
         while True:
             tick = time.monotonic()
-            info = api.get("map_info.json")
+            # Each request costs about 2s while the game is in the background,
+            # so re-reading map_info every frame would halve the sample rate.
+            # A battle change only needs catching within a few seconds.
+            if tick - info_checked >= INFO_INTERVAL or info is None:
+                info = api.get("map_info.json")
+                info_checked = tick
 
             if not map_is_live(info):
                 if current is not None:
                     current.close()
                     current = None
                     print("map gone; waiting for the next one...")
+                info = None
                 time.sleep(1.0)
                 continue
 
