@@ -1,0 +1,14 @@
+# Replays and generated data stay local
+replays/
+*.wrpl
+data/
+*.parquet
+*.duckdb
+
+# Vendored AGPL parser and compiled tools
+vendor/wrpl-inspector/
+bin/
+
+.DS_Store
+__pycache__/
+.venv/

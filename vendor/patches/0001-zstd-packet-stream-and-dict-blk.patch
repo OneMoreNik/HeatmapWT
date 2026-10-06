@@ -1,0 +1,122 @@
+diff --git a/wrpl/blk.go b/wrpl/blk.go
+index ffaf9d3..c89e0f8 100644
+--- a/wrpl/blk.go
++++ b/wrpl/blk.go
+@@ -48,7 +48,7 @@ func BlkNeedsNameMap(input []byte) (bool, error) {
+ 	case 0x04: // SLIM_ZSTD
+ 		return true, nil
+ 	case 0x05: // SLIM_ZSTD_DICT
+-		return false, errors.New("SLIM_ZSTD_DICT BLK not supported (requires dictionary and external name map)")
++		return true, nil
+ 	case 0x00: // BBF legacy
+ 		return false, errors.New("BBF BLK not supported")
+ 	default:
+@@ -59,6 +59,14 @@ func BlkNeedsNameMap(input []byte) (bool, error) {
+ // ParseBlkWithNameMap is ParseBlk that also accepts an optional external name
+ // map, which SLIM and SLIM_ZSTD BLKs reference instead of embedding one.
+ func ParseBlkWithNameMap(input []byte, nameMap []string) (ret map[string]any, err error) {
++	return ParseBlkWithNameMapAndDict(input, nameMap, nil)
++}
++
++// ParseBlkWithNameMapAndDict also accepts the zstd dictionary that
++// SLIM_ZSTD_DICT BLKs are compressed against. Game archives ship both pieces
++// next to the BLKs: the name map under the 0xff-prefixed "?nm" entry, the
++// dictionary as a "<sha256>.dict" entry.
++func ParseBlkWithNameMapAndDict(input []byte, nameMap []string, dict []byte) (ret map[string]any, err error) {
+ 	if len(input) == 0 {
+ 		return nil, errors.New("empty BLK buffer")
+ 	}
+@@ -106,7 +114,22 @@ func ParseBlkWithNameMap(input []byte, nameMap []string) (ret map[string]any, er
+ 		}
+ 		return parseFatBlk(out, nameMap)
+ 	case 0x05: // SLIM_ZSTD_DICT
+-		return nil, errors.New("SLIM_ZSTD_DICT BLK not supported (requires dictionary and external name map)")
++		if nameMap == nil {
++			return nil, errors.New("SLIM_ZSTD_DICT BLK needs an external name map")
++		}
++		if dict == nil {
++			return nil, errors.New("SLIM_ZSTD_DICT BLK needs the archive's zstd dictionary")
++		}
++		dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
++		if err != nil {
++			return nil, fmt.Errorf("SLIM_ZSTD_DICT: new zstd reader: %w", err)
++		}
++		defer dec.Close()
++		out, err := dec.DecodeAll(input[1:], nil)
++		if err != nil {
++			return nil, fmt.Errorf("SLIM_ZSTD_DICT: decode: %w", err)
++		}
++		return parseFatBlk(out, nameMap)
+ 	case 0x00: // BBF legacy
+ 		return nil, errors.New("BBF BLK not supported")
+ 	default:
+diff --git a/wrpl/wrplRead.go b/wrpl/wrplRead.go
+index 852169f..36b2dc6 100644
+--- a/wrpl/wrplRead.go
++++ b/wrpl/wrplRead.go
+@@ -28,8 +28,53 @@ import (
+ 	"slices"
+ 
+ 	"github.com/klauspost/compress/zlib"
++	"github.com/klauspost/compress/zstd"
+ )
+ 
++// zstdMagic is the Zstandard frame magic.  Replays recorded by game version
++// 101404 (October 2026) compress the packet stream with zstd; older ones used
++// zlib, so both are accepted.
++var zstdMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
++
++// zstdReadCloser adapts a zstd decoder to io.ReadCloser.
++type zstdReadCloser struct {
++	io.Reader
++	dec *zstd.Decoder
++}
++
++func (z *zstdReadCloser) Close() error {
++	z.dec.Close()
++	return nil
++}
++
++// openPacketStream decompresses the packet stream at the current offset,
++// picking the codec from the frame magic.
++func openPacketStream(r io.ReadSeeker) (io.ReadCloser, error) {
++	at, err := r.Seek(0, io.SeekCurrent)
++	if err != nil {
++		return nil, err
++	}
++	var magic [4]byte
++	if _, err := io.ReadFull(r, magic[:]); err != nil {
++		return nil, fmt.Errorf("reading compression magic: %w", err)
++	}
++	if _, err := r.Seek(at, io.SeekStart); err != nil {
++		return nil, err
++	}
++	if bytes.Equal(magic[:], zstdMagic) {
++		dec, err := zstd.NewReader(r)
++		if err != nil {
++			return nil, fmt.Errorf("opening zstd packets stream: %w", err)
++		}
++		return &zstdReadCloser{Reader: dec.IOReadCloser(), dec: dec}, nil
++	}
++	rc, err := zlib.NewReader(r)
++	if err != nil {
++		return nil, fmt.Errorf("opening zlib packets stream: %w", err)
++	}
++	return rc, nil
++}
++
+ // type Player struct {
+ // 	Name    string
+ // 	ClanTag string
+@@ -173,9 +218,9 @@ func OpenReplay(r io.ReadSeeker, readSettings, openPackets, readResults bool) (r
+ 		if err != nil {
+ 			return ret, fmt.Errorf("seeking for packets")
+ 		}
+-		ret.PacketStream, err = zlib.NewReader(r)
++		ret.PacketStream, err = openPacketStream(r)
+ 		if err != nil {
+-			return ret, fmt.Errorf("opening zlib packets stream: %w", err)
++			return ret, err
+ 		}
+ 	}
+ 
