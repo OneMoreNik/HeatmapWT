@@ -24,9 +24,16 @@ func dumpECS(res *carveResult) {
 
 	// How often each component name appears across all entities.
 	counts := map[string]int{}
-	withClassName := 0
+	templates := map[string]int{}
+	compCounts := map[int]int{}
+	withComponents, withClassName := 0, 0
 	for _, idx := range indexes {
 		e := res.ECS.Entities[idx]
+		templates[e.Template]++
+		compCounts[len(e.Data.Components)]++
+		if len(e.Data.Components) > 0 {
+			withComponents++
+		}
 		for _, name := range componentNames(e) {
 			counts[name]++
 			if name == "unit__className" {
@@ -35,8 +42,29 @@ func dumpECS(res *carveResult) {
 		}
 	}
 
-	fmt.Printf("  ECS entities with any decoded component: %d of %d\n", len(indexes), len(res.ECS.Entities))
+	fmt.Printf("  ECS entities parsed:                     %d\n", len(indexes))
+	fmt.Printf("  entities with at least one component:    %d\n", withComponents)
 	fmt.Printf("  entities carrying unit__className:       %d\n", withClassName)
+
+	fmt.Println("  component count per entity:")
+	sizes := make([]int, 0, len(compCounts))
+	for n := range compCounts {
+		sizes = append(sizes, n)
+	}
+	sort.Ints(sizes)
+	for _, n := range sizes[:min(10, len(sizes))] {
+		fmt.Printf("    %3d components  x%d\n", n, compCounts[n])
+	}
+
+	fmt.Println("  most common templates (names come straight off the wire):")
+	tnames := make([]string, 0, len(templates))
+	for t := range templates {
+		tnames = append(tnames, t)
+	}
+	sort.Slice(tnames, func(i, j int) bool { return templates[tnames[i]] > templates[tnames[j]] })
+	for _, t := range tnames[:min(20, len(tnames))] {
+		fmt.Printf("    %5d  %s\n", templates[t], t)
+	}
 	fmt.Println("  most common component names:")
 	names := make([]string, 0, len(counts))
 	for n := range counts {

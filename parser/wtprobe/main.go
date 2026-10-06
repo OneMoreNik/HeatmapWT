@@ -56,6 +56,10 @@ func main() {
 	}
 	run := histogram
 	switch {
+	case *flFamilies:
+		run = familyReport
+	case *flSpawn:
+		run = spawnTest
 	case *flDump > 0:
 		run = dump
 	case *flTracks:

@@ -30,6 +30,8 @@ var (
 	flMission = flag.String("mission", "", "mission blk path as it appears in the replay header")
 	flOut     = flag.String("out", "", "write the result as JSON to this file")
 	flList    = flag.String("list", "", "instead, list vromfs entries containing this substring")
+	flBLK     = flag.String("blk", "", "instead, print this blk from -archive as JSON")
+	flArchive = flag.String("archive", "aces.vromfs.bin", "which vromfs -blk reads from")
 )
 
 // vromfs reads one packed game archive and returns its files plus name map.
@@ -221,6 +223,26 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		return
+	}
+
+	if *flBLK != "" {
+		v, err := vromfs(*flArchive)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		blk, err := parseBLK(v, *flBLK)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		raw, err := json.MarshalIndent(blk, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(string(raw))
 		return
 	}
 
