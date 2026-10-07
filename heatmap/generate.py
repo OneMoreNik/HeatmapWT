@@ -207,8 +207,13 @@ def render(grid: Grid, out_px: int, clip: float) -> list[bytes]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tracks", nargs="+", type=Path, help="tracks.csv files")
-    parser.add_argument("--map", dest="map_dir", type=Path, required=True,
-                        help="data/maps/<map>/<mode>, for the area size")
+    parser.add_argument("--map", dest="map_dir", type=Path,
+                        help="data/maps/<map>/<mode>, for the area size. Optional: "
+                             "wt-tools does not publish every map, and --size "
+                             "covers the rest")
+    parser.add_argument("--size", type=float,
+                        help="side of the playable square in metres, used when there "
+                             "is no map image. The client reports it as grid_size")
     parser.add_argument("--layout", type=Path, required=True,
                         help="data/levels/<map>_<layout>.json, for the area centre")
     parser.add_argument("--class", dest="vclass", choices=sorted(CLASSES),
@@ -227,12 +232,15 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="output PNG path")
     args = parser.parse_args()
 
-    map_meta = json.loads((args.map_dir / "map.json").read_text())
+    map_meta = {}
+    if args.map_dir and (args.map_dir / "map.json").exists():
+        map_meta = json.loads((args.map_dir / "map.json").read_text())
     layout = json.loads(args.layout.read_text())
     centre = battle_area_centre(layout)
-    size_m = map_meta.get("size_m")
+    size_m = args.size or map_meta.get("size_m")
     if centre is None or not size_m:
-        raise SystemExit("need both an area centre (layout) and a size (map)")
+        raise SystemExit("need an area centre (from --layout) and a size "
+                         "(from --map or --size)")
     min_x, min_z = centre[0] - size_m / 2, centre[1] - size_m / 2
 
     wanted = CLASSES[args.vclass] if args.vclass else None

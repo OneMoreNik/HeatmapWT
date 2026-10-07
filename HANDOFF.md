@@ -39,7 +39,11 @@ Supporting data, fetched once per map and cached:
 - `bin/wtlevel.exe` reads capture points, spawns and the battle area out of the
   **installed game**, so no calibration is ever needed.
 - `collector/fetch_maps.py` downloads the map image and its size from
-  wt-tools.app (62 maps indexed).
+  wt-tools.app. **It indexes 62 maps, which is not all of them** — soviet_range,
+  guadalcanal and alps are among the missing. A map image is decoration, not a
+  dependency: the client reports the playable square as `grid_size` in every
+  recording's `map_info.json`, and its centre matches the mission's battle
+  area, so the geometry survives without one.
 - `bin/wtresults.exe` reads the scoreboard out of any replay file: who played,
   their scores, and which team the recording player was on.
 
@@ -128,6 +132,8 @@ Each of these cost real time; none are obvious.
   `SLIM_ZSTD_DICT` and need the archive's name map and dictionary.
 - **Record with `--speed` matching the playback speed**, or every timestamp,
   speed and dwell time is wrong by that factor.
+- **A battle type splits on the LAST underscore.** `soviet_range_Dom` is the
+  map `soviet_range` with layout `Dom`, not `soviet` with `range_dom`.
 - **Missions name their areas inconsistently, and it is worse than it looks.**
   Berlin has `dom_capture_area_01_hardcore` and `dom_battle_area_hardcore`;
   Tunisia defines only `_arcade` variants; Poland writes `battlearea` as one
@@ -227,8 +233,14 @@ What has been checked end to end, on four battles across three maps:
 - `--follow` highlights the intended player, verified by the tooltip.
 - A map never seen before (Poland) has its layout extracted from the installed
   game and its image fetched, with no preparation.
-- Alignment holds: 100% of Poland and Tunisia samples fall inside the map
-  square, 95.6% on Berlin, and tracks start a median 24-53 m from a real spawn.
+- Alignment holds: 100% of Poland, Tunisia and soviet_range samples fall inside
+  the map square, 95.6% on Berlin, and tracks start a median 24-53 m from a
+  real spawn.
+- The grid fallback is exact. On soviet_range, which wt-tools does not publish,
+  the mission's battle-area centre and the client's grid centre are the same
+  point, (2004, 2023), derived independently.
+- A live battle records and processes: 56 tracks and 106,838 samples from one
+  battle at 20 Hz in real time.
 - The automation refuses to start while a battle is live.
 
 ## Recording a live battle

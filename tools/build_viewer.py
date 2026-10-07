@@ -35,8 +35,13 @@ def data_uri(path: Path) -> str:
 
 
 def build(map_dir: Path, heatmaps: Path, prefix: str) -> str:
-    map_meta = json.loads((map_dir / "map.json").read_text())
-    map_image = data_uri(map_dir / map_meta["image"])
+    meta_path = map_dir / "map.json" if map_dir else None
+    map_meta = json.loads(meta_path.read_text()) if meta_path and meta_path.exists() else {}
+    image_path = map_dir / map_meta["image"] if map_meta.get("image") else None
+    # wt-tools does not publish every map. Without a background the heatmap
+    # still reads fine against the grid, so this is a missing picture rather
+    # than a missing capability.
+    map_image = data_uri(image_path) if image_path and image_path.exists() else ""
 
     layers = []
     for key, label in LAYERS:
@@ -55,7 +60,7 @@ def build(map_dir: Path, heatmaps: Path, prefix: str) -> str:
     if not layers:
         raise SystemExit(f"no heatmaps found in {heatmaps} with prefix {prefix!r}")
 
-    title = f"{map_meta.get('map', '?')} — {map_meta.get('mode', '?')}"
+    title = f"{map_meta.get('map') or map_dir.parent.name} — {map_meta.get('mode') or map_dir.name}"
     buttons = "\n".join(
         f'<button data-layer="{l["key"]}"{" class=\'on\'" if i == 0 else ""}>'
         f'{html.escape(l["label"])}</button>'
@@ -109,7 +114,7 @@ def build(map_dir: Path, heatmaps: Path, prefix: str) -> str:
 </div>
 
 <div class="stage" id="stage">
-  <img id="base" src="{map_image}" alt="map">
+  <img id="base" src="{map_image}" alt="map"{'' if map_image else ' hidden'}>
   {images}
 </div>
 

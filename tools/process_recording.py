@@ -49,8 +49,14 @@ def run(args: list[str], quiet: bool = True, what: str = "") -> subprocess.Compl
 
 
 def layout_key(battle_type: str) -> tuple[str, str]:
-    """"berlin_Conq2" -> ("berlin", "conq2"); the map and its layout."""
-    map_name, _, layout = battle_type.partition("_")
+    """"berlin_Conq2" -> ("berlin", "conq2"); the map and its layout.
+
+    Split on the LAST underscore: a map name may contain its own, as in
+    "soviet_range_Dom" or "eastern_europe_02_Dom".
+    """
+    map_name, _, layout = battle_type.rpartition("_")
+    if not map_name:
+        map_name, layout = layout, ""
     return map_name.lower(), layout.lower()
 
 
@@ -110,10 +116,25 @@ def process(recording: Path, args) -> bool:
         return True
 
     layout = ensure_layout(source, args.levels)
-    map_dir = ensure_map(source, args.maps)
-    if layout is None or map_dir is None:
-        print("  missing layout or map; cannot continue")
+    if layout is None:
+        print("  no layout geometry; cannot place anything on a map")
         return False
+
+    map_dir = ensure_map(source, args.maps)
+    size_m = None
+    if map_dir is None:
+        # wt-tools publishes 62 maps, not all of them. The client reports the
+        # playable square as grid_size, and its centre matches the mission's
+        # battle area, so the geometry survives without an image.
+        info = json.loads((recording / "map_info.json").read_text(encoding="utf-8"))
+        grid = info.get("grid_size") or []
+        if len(grid) >= 1 and grid[0]:
+            size_m = float(grid[0])
+            print(f"  no map image published for this map; using the client's "
+                  f"{size_m:.0f} m grid instead")
+        else:
+            print("  no map image and no grid size; cannot continue")
+            return False
 
     speed = source.get("speed", 1)
     result = run([sys.executable, "tools/build_tracks.py", recording, "--speed", speed],
@@ -125,29 +146,36 @@ def process(recording: Path, args) -> bool:
         return False
 
     args.heatmaps.mkdir(parents=True, exist_ok=True)
-    run([sys.executable, "tools/plot_tracks.py", recording, "--layout", layout,
-         "--map", map_dir, "--out", args.heatmaps / f"{prefix}-tracks.svg"],
-        what="track plot")
+    plot = [sys.executable, "tools/plot_tracks.py", recording, "--layout", layout,
+            "--out", args.heatmaps / f"{prefix}-tracks.svg"]
+    if map_dir:
+        plot += ["--map", map_dir]
+    run(plot, what="track plot")
 
     tracks = recording / "tracks.csv"
     made = 0
     for vclass in CLASSES:
-        cmd = [sys.executable, "heatmap/generate.py", tracks, "--map", map_dir,
+        cmd = [sys.executable, "heatmap/generate.py", tracks,
                "--layout", layout, "--out", args.heatmaps / f"{prefix}-{vclass}.png"]
+        cmd += ["--map", map_dir] if map_dir else ["--size", size_m]
         if vclass != "all":
             cmd += ["--class", vclass]
         made += run(cmd, what=f"heatmap {vclass}").returncode == 0
     for weighting in WEIGHTINGS:
-        made += run([sys.executable, "heatmap/generate.py", tracks, "--map", map_dir,
-                     "--layout", layout, "--mode", weighting,
-                     "--out", args.heatmaps / f"{prefix}-{weighting}.png"],
-                    what=f"heatmap {weighting}").returncode == 0
+        cmd = [sys.executable, "heatmap/generate.py", tracks, "--layout", layout,
+               "--mode", weighting,
+               "--out", args.heatmaps / f"{prefix}-{weighting}.png"]
+        cmd += ["--map", map_dir] if map_dir else ["--size", size_m]
+        made += run(cmd, what=f"heatmap {weighting}").returncode == 0
     if made == 0:
         print("  no heatmaps produced")
         return False
 
     viewer = args.heatmaps / f"{prefix}.html"
-    if run([sys.executable, "tools/build_viewer.py", map_dir, "--heatmaps", args.heatmaps,
+    viewer_dir = map_dir or (args.maps / layout_key(source["battleType"])[0]
+                             / wt_tools_mode(layout_key(source["battleType"])[1]))
+    viewer_dir.mkdir(parents=True, exist_ok=True)
+    if run([sys.executable, "tools/build_viewer.py", viewer_dir, "--heatmaps", args.heatmaps,
             "--prefix", prefix, "--out", viewer], what="viewer").returncode != 0:
         return False
     print(f"  {made} heatmaps -> {viewer}")
@@ -174,7 +202,8 @@ def expand(paths: list[Path]) -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("recordings", nargs="+", type=Path)
+    parser.add_argument("recordings", nargs="*", type=Path,
+                        help="recording directories; omit when using --newest")
     parser.add_argument("--levels", type=Path, default=Path("data/levels"))
     parser.add_argument("--maps", type=Path, default=Path("data/maps"))
     parser.add_argument("--heatmaps", type=Path, default=Path("data/heatmaps"))
@@ -188,6 +217,8 @@ def main() -> int:
         folders = [d for d in Path("data/live").iterdir() if d.is_dir()]
         args.recordings = sorted(folders, key=lambda d: d.stat().st_mtime,
                                  reverse=True)[:args.newest]
+    if not args.recordings:
+        parser.error("give one or more recording directories, or use --newest N")
 
     done = 0
     for recording in args.recordings:
