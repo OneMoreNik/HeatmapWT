@@ -49,7 +49,7 @@ STYLE = {
 }
 
 
-def map_background(map_dir: Path, layout: dict):
+def map_background(map_dir: Path, layout: dict, size_override: float | None = None):
     """Image bytes and world bounds for the map picture, or None.
 
     wt-tools publishes the image and the size of the area it covers but not
@@ -59,7 +59,9 @@ def map_background(map_dir: Path, layout: dict):
     if not meta_path.exists():
         return None
     meta = json.loads(meta_path.read_text())
-    size = meta.get("size_m")
+    # The client's grid is authoritative; wt-tools' published size is not
+    # always right, so the image is stretched to the real square.
+    size = size_override or meta.get("size_m")
     centre = battle_area_centre(layout)
     if not size or centre is None:
         return None
@@ -267,6 +269,9 @@ def main() -> int:
     parser.add_argument("--layout", type=Path, help="data/levels/<map>_<layout>.json")
     parser.add_argument("--map", type=Path, dest="map_dir",
                         help="data/maps/<map>/<mode> directory with the map image")
+    parser.add_argument("--size", type=float,
+                        help="side of the playable square in metres, overriding the "
+                             "size published with the image")
     parser.add_argument("--out", type=Path, help="where to write the SVG")
     args = parser.parse_args()
 
@@ -281,7 +286,7 @@ def main() -> int:
         "subtitle": f"{len(tracks)} tracks, {samples} samples over {span:.0f}s  ·  "
                     f"recorded from the client map during replay playback",
     }
-    background = map_background(args.map_dir, layout) if args.map_dir else None
+    background = map_background(args.map_dir, layout, args.size) if args.map_dir else None
     if args.map_dir and background is None:
         print(f"no usable map image in {args.map_dir}; drawing without one")
 

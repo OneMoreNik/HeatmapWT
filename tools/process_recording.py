@@ -136,16 +136,21 @@ def process(recording: Path, args) -> bool:
         return False
 
     map_dir = ensure_map(source, args.maps)
+
+    # The client reports the playable square it actually used. Prefer it over
+    # the size published with the image, which has been seen to disagree.
     size_m = None
+    info = json.loads((recording / "map_info.json").read_text(encoding="utf-8"))
+    grid = info.get("grid_size") or []
+    if len(grid) >= 1 and grid[0]:
+        size_m = float(grid[0])
+
     if map_dir is None:
         # wt-tools publishes 62 maps, not all of them. The client reports the
         # playable square as grid_size, and its centre matches the mission's
         # battle area, so the geometry survives without an image.
-        info = json.loads((recording / "map_info.json").read_text(encoding="utf-8"))
-        grid = info.get("grid_size") or []
-        if len(grid) >= 1 and grid[0]:
-            size_m = float(grid[0])
-            print(f"  no map image published for this map; using the client's "
+        if size_m:
+            print(f"  no map image published; using the client's "
                   f"{size_m:.0f} m grid instead")
         else:
             print("  no map image and no grid size; cannot continue")
@@ -165,6 +170,8 @@ def process(recording: Path, args) -> bool:
             "--out", args.heatmaps / f"{prefix}-tracks.svg"]
     if map_dir:
         plot += ["--map", map_dir]
+    if size_m:
+        plot += ["--size", size_m]
     run(plot, what="track plot")
 
     tracks = recording / "tracks.csv"
@@ -172,7 +179,10 @@ def process(recording: Path, args) -> bool:
     for vclass in CLASSES:
         cmd = [sys.executable, "heatmap/generate.py", tracks,
                "--layout", layout, "--out", args.heatmaps / f"{prefix}-{vclass}.png"]
-        cmd += ["--map", map_dir] if map_dir else ["--size", size_m]
+        if map_dir:
+            cmd += ["--map", map_dir]
+        if size_m:
+            cmd += ["--size", size_m]
         if vclass != "all":
             cmd += ["--class", vclass]
         made += run(cmd, what=f"heatmap {vclass}").returncode == 0
@@ -180,7 +190,10 @@ def process(recording: Path, args) -> bool:
         cmd = [sys.executable, "heatmap/generate.py", tracks, "--layout", layout,
                "--mode", weighting,
                "--out", args.heatmaps / f"{prefix}-{weighting}.png"]
-        cmd += ["--map", map_dir] if map_dir else ["--size", size_m]
+        if map_dir:
+            cmd += ["--map", map_dir]
+        if size_m:
+            cmd += ["--size", size_m]
         made += run(cmd, what=f"heatmap {weighting}").returncode == 0
     if made == 0:
         print("  no heatmaps produced")

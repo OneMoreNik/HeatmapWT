@@ -212,8 +212,11 @@ def main() -> int:
                              "wt-tools does not publish every map, and --size "
                              "covers the rest")
     parser.add_argument("--size", type=float,
-                        help="side of the playable square in metres, used when there "
-                             "is no map image. The client reports it as grid_size")
+                        help="side of the playable square in metres. Overrides the "
+                             "size published with the map image: the client's own "
+                             "grid_size is authoritative, and wt-tools is sometimes "
+                             "wrong (it gives Test-Site 2271 as 1600 m against the "
+                             "client's 1700 m)")
     parser.add_argument("--layout", type=Path, required=True,
                         help="data/levels/<map>_<layout>.json, for the area centre")
     parser.add_argument("--class", dest="vclass", choices=sorted(CLASSES),

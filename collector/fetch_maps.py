@@ -54,6 +54,7 @@ def load_manifest() -> dict:
 # resolved by shape where possible, and listed here where they cannot be.
 MAP_ALIASES = {
     "hurtgen": "battle_of_hurtgen_forest",
+    "soviet_range": "test-site_2271",
     "normandy_fields": "fields_of_normandy",
     "poland_fields": "fields_of_poland",
     "volokolamsk_surroundings": "surroundings_of_volokolamsk",
