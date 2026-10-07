@@ -44,12 +44,18 @@ if hasattr(sys.stdout, "reconfigure"):
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
-WINDOW_TITLE = "War Thunder"
+# The window title carries the renderer ("War Thunder (DirectX 12, 64bit)"),
+# so match the window class instead, which is stable across renderers.
+WINDOW_CLASS = "DagorWClass"
+WINDOW_TITLE_HINT = "War Thunder"
 INPUT_MOUSE = 0
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_ABSOLUTE = 0x8000
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+INPUT_KEYBOARD = 1
+KEYEVENTF_KEYUP = 0x0002
+VK_ESCAPE = 0x1B
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -58,9 +64,15 @@ class MOUSEINPUT(ctypes.Structure):
                 ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))]
 
 
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))]
+
+
 class INPUT(ctypes.Structure):
     class _U(ctypes.Union):
-        _fields_ = [("mi", MOUSEINPUT)]
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
     _anonymous_ = ("u",)
     _fields_ = [("type", wintypes.DWORD), ("u", _U)]
 
@@ -68,9 +80,13 @@ class INPUT(ctypes.Structure):
 class Screen:
     """Synthetic mouse input, with an abort corner and a dry-run mode."""
 
-    def __init__(self, layout: dict, dry_run: bool):
+    def __init__(self, layout: dict, dry_run: bool, shots_dir: Path | None = None):
         self.layout = layout
         self.dry_run = dry_run
+        self.shots_dir = shots_dir
+        self.shot_index = 0
+        if shots_dir is not None:
+            shots_dir.mkdir(parents=True, exist_ok=True)
         self.width = user32.GetSystemMetrics(0)
         self.height = user32.GetSystemMetrics(1)
         ref = layout.get("screen", {})
@@ -86,6 +102,33 @@ class Screen:
         user32.GetCursorPos(ctypes.byref(pos))
         return pos.x <= 2 and pos.y <= 2
 
+    def shot(self, tag: str) -> None:
+        """Capture the screen, so a misfire can be seen rather than guessed at."""
+        if self.shots_dir is None:
+            return
+        self.shot_index += 1
+        out = self.shots_dir / f"{self.shot_index:03d}-{tag}.png"
+        script = Path(__file__).with_name("screenshot.ps1")
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                        "-File", str(script), "-Out", str(out)],
+                       capture_output=True, timeout=60)
+
+    def press(self, vk: int, label: str) -> None:
+        """Tap a key, used to back out of the post-battle screen."""
+        if self.dry_run:
+            print(f"    [dry-run] press {label}")
+            return
+        if not game_is_focused() and not focus_game():
+            raise RuntimeError("the game is not the foreground window; refusing to type")
+        for flags in (0, KEYEVENTF_KEYUP):
+            event = INPUT(type=INPUT_KEYBOARD,
+                          ki=KEYBDINPUT(vk, 0, flags, 0, None))
+            user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+            time.sleep(0.04)
+        print(f"    press {label}", flush=True)
+        time.sleep(self.layout["timings"]["after_click_s"])
+        self.shot("press")
+
     def click(self, point: dict, label: str = "") -> None:
         x, y = self.to_screen(point)
         note = point.get("note", label)
@@ -94,6 +137,10 @@ class Screen:
             return
         if self.aborted():
             raise KeyboardInterrupt("pointer parked in the top-left corner")
+        if not game_is_focused() and not focus_game():
+            raise RuntimeError(
+                "the game is not the foreground window; refusing to click, "
+                "since the input would go to whatever is in front instead")
         ax = int(x * 65535 / max(self.width - 1, 1))
         ay = int(y * 65535 / max(self.height - 1, 1))
         for flags in (MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
@@ -102,18 +149,68 @@ class Screen:
                           mi=MOUSEINPUT(ax, ay, 0, flags, 0, None))
             user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
             time.sleep(0.03)
-        print(f"    click ({x},{y}) {note}")
+        print(f"    click ({x},{y}) {note}", flush=True)
         time.sleep(self.layout["timings"]["after_click_s"])
+        self.shot(f"click-{x}-{y}")
 
 
-def focus_game() -> bool:
-    handle = user32.FindWindowW(None, WINDOW_TITLE)
+def find_game() -> int:
+    """Handle of the game window, or 0."""
+    handle = user32.FindWindowW(WINDOW_CLASS, None)
+    if handle:
+        return handle
+    # Fall back to a title scan in case the class ever changes.
+    found = []
+    proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def visit(hwnd, _):
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length:
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            if buf.value.startswith(WINDOW_TITLE_HINT):
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(proc(visit), 0)
+    return found[0] if found else 0
+
+
+def focus_game(timeout: float = 6.0) -> bool:
+    """Bring the game to the front and confirm it got there.
+
+    Windows refuses SetForegroundWindow from a process that does not already
+    own the foreground, and does so silently. Attaching to the current
+    foreground window's input queue first lifts that restriction; the result
+    is then verified rather than assumed, because a failed focus means the
+    clicks land in whatever application is in front instead.
+    """
+    handle = find_game()
     if not handle:
         return False
     user32.ShowWindow(handle, 9)  # SW_RESTORE
-    user32.SetForegroundWindow(handle)
-    time.sleep(0.6)
-    return True
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = user32.GetForegroundWindow()
+        if current == handle:
+            return True
+        ours = user32.GetWindowThreadProcessId(current, None)
+        theirs = user32.GetWindowThreadProcessId(handle, None)
+        attached = ours and theirs and ours != theirs
+        if attached:
+            user32.AttachThreadInput(ours, theirs, True)
+        user32.BringWindowToTop(handle)
+        user32.SetForegroundWindow(handle)
+        if attached:
+            user32.AttachThreadInput(ours, theirs, False)
+        time.sleep(0.4)
+    return user32.GetForegroundWindow() == handle
+
+
+def game_is_focused() -> bool:
+    handle = find_game()
+    return bool(handle) and user32.GetForegroundWindow() == handle
 
 
 def game_replays(folder: Path) -> list[Path]:
@@ -133,10 +230,13 @@ def describe(replay: Path, wtresults: Path) -> str:
         if not data:
             return replay.name
         battle = data[0]
-        players = battle.get("players", [])
-        top = players[0]["name"] if players else "?"
+        # The author's team is the only side a client replay can follow, so
+        # report its best player rather than the best overall.
+        team = battle.get("authorTeam")
+        mine = [p for p in battle.get("players", []) if p.get("team") == team]
+        top = (mine or battle.get("players") or [{}])[0].get("name", "?")
         return (f"{replay.name}  {battle.get('battleType', '?')}  "
-                f"{battle.get('timePlayed', 0):.0f}s  top: {top}")
+                f"{battle.get('timePlayed', 0):.0f}s  team {team} best: {top}")
     except Exception:
         return replay.name
 
@@ -195,6 +295,11 @@ def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
             time.sleep(2.0)
         print(f"    battle ended after {time.monotonic() - start:.0f}s of playback")
         time.sleep(timings["battle_end_grace_s"])
+        # A finished replay leaves the client on the results screen, not the
+        # hangar, so the next run's menu clicks would land on nothing.
+        for _ in range(3):
+            screen.press(VK_ESCAPE, "Esc to leave the results screen")
+            time.sleep(1.5)
     finally:
         recorder.terminate()
         try:
@@ -218,6 +323,8 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="list replays with their row numbers")
     parser.add_argument("--dry-run", action="store_true",
                         help="print every click without sending any input")
+    parser.add_argument("--shots", type=Path,
+                        help="save a screenshot after every click into this directory")
     args = parser.parse_args()
 
     layout = json.loads(args.layout.read_text(encoding="utf-8"))
@@ -240,10 +347,10 @@ def main() -> int:
                          "return to the hangar first")
 
     if not args.dry_run and not focus_game():
-        raise SystemExit(f"could not find a window titled {WINDOW_TITLE!r}")
+        raise SystemExit(f"no window of class {WINDOW_CLASS!r}; is the game running?")
 
     speed_clicks = max(0, round((args.speed).bit_length() - 1))
-    screen = Screen(layout, args.dry_run)
+    screen = Screen(layout, args.dry_run, args.shots)
     rows = [int(r) for r in args.rows.split(",") if r.strip()]
 
     print(f"{len(rows)} replay(s) to play at {args.speed}x "

@@ -199,12 +199,27 @@ def render(grid: Grid, out_px: int, clip: float) -> list[bytes]:
     return rows
 
 
+# Missions name their areas per difficulty: Berlin has both "_hardcore"
+# (Realistic) and "_arcade" variants, Tunisia only "_arcade". Prefer the
+# Realistic one where it exists and fall back rather than finding nothing.
+DIFFICULTY_SUFFIXES = ("_hardcore", "_arcade", "")
+
+
+def pick_areas(layout: dict, needle: str) -> list[dict]:
+    """Areas whose name contains `needle`, from the best available difficulty."""
+    areas = [a for a in layout.get("captures", [])
+             if needle in a.get("name", "") and not a.get("name", "").startswith("briefing_")]
+    for suffix in DIFFICULTY_SUFFIXES:
+        chosen = [a for a in areas if a["name"].endswith(suffix)]
+        if chosen:
+            return chosen
+    return []
+
+
 def battle_area_centre(layout: dict):
-    for area in layout.get("captures", []):
-        name = area.get("name", "")
-        if "battle_area" in name and name.endswith("_hardcore"):
-            return area["x"], area["z"]
-    return None
+    """Centre of the playable square, which is also the map image's centre."""
+    areas = pick_areas(layout, "battle_area")
+    return (areas[0]["x"], areas[0]["z"]) if areas else None
 
 
 def main() -> int:

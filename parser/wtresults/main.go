@@ -41,7 +41,11 @@ type player struct {
 }
 
 type battle struct {
-	File       string   `json:"file"`
+	File string `json:"file"`
+	// AuthorTeam is the side the recording player was on. A client replay can
+	// only follow that side, and the client's own results screen lists only
+	// that side, so it is the team a target player must be picked from.
+	AuthorTeam int      `json:"authorTeam"`
 	Level      string   `json:"level"`
 	Mission    string   `json:"mission"`
 	BattleType string   `json:"battleType"`
@@ -142,8 +146,32 @@ func readBattle(path string) (*battle, error) {
 	})
 	for i := range out.Players {
 		out.Players[i].Rank = i + 1
+		if fullName(out.Players[i]) == out.Author {
+			out.AuthorTeam = out.Players[i].Team
+		}
 	}
 	return out, nil
+}
+
+// fullName rebuilds the "CLAN Name" form the author field uses.
+func fullName(p player) string {
+	if p.ClanTag != "" {
+		return p.ClanTag + " " + p.Name
+	}
+	return p.Name
+}
+
+// TopOfAuthorTeam is the highest scorer on the side the replay can follow.
+func (b *battle) TopOfAuthorTeam() *player {
+	for i := range b.Players {
+		if b.Players[i].Team == b.AuthorTeam {
+			return &b.Players[i]
+		}
+	}
+	if len(b.Players) > 0 {
+		return &b.Players[0]
+	}
+	return nil
 }
 
 func main() {
@@ -165,22 +193,30 @@ func main() {
 			continue
 		}
 		fmt.Printf("%s\n", path)
-		fmt.Printf("  %s | %s | session %s | %.0f s played\n",
-			b.Level, b.BattleType, b.SessionID, b.TimePlayed)
+		fmt.Printf("  %s | %s | session %s\n", b.Level, b.BattleType, b.SessionID)
+		fmt.Printf("  author %s, team %d, %.0f s in the battle\n",
+			b.Author, b.AuthorTeam, b.TimePlayed)
+		if top := b.TopOfAuthorTeam(); top != nil {
+			fmt.Printf("  follow: %s, %d points, top of the author's team\n",
+				fullName(*top), top.Score)
+		}
 		shown := b.Players
 		if *flTop > 0 && len(shown) > *flTop {
 			shown = shown[:*flTop]
 		}
-		fmt.Printf("  %-4s %-26s %-5s %7s %6s %7s %7s\n",
+		fmt.Printf("    %-4s %-26s %-5s %7s %6s %7s %7s\n",
 			"rank", "player", "team", "score", "kills", "deaths", "assists")
 		for _, p := range shown {
-			name := p.Name
-			if p.ClanTag != "" {
-				name = p.ClanTag + " " + p.Name
+			// The client's own results screen lists only the author's team, so
+			// mark it: those are the players a client replay can follow.
+			mark := " "
+			if p.Team == b.AuthorTeam {
+				mark = "*"
 			}
-			fmt.Printf("  %-4d %-26s %-5d %7d %6d %7d %7d\n",
-				p.Rank, name, p.Team, p.Score, p.Kills, p.Deaths, p.Assists)
+			fmt.Printf("  %s %-4d %-26s %-5d %7d %6d %7d %7d\n",
+				mark, p.Rank, fullName(p), p.Team, p.Score, p.Kills, p.Deaths, p.Assists)
 		}
+		fmt.Println("    * = the author's team")
 		fmt.Println()
 	}
 

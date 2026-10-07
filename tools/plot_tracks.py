@@ -43,18 +43,27 @@ STYLE = {
 }
 
 
-def battle_area_centre(layout: dict) -> tuple[float, float] | None:
-    """Centre of the playable square, from the mission's battle area.
+# Missions name their areas per difficulty: Berlin has both "_hardcore"
+# (Realistic) and "_arcade" variants, Tunisia only "_arcade". Prefer the
+# Realistic one where it exists and fall back rather than finding nothing.
+DIFFICULTY_SUFFIXES = ("_hardcore", "_arcade", "")
 
-    The client reports the same square as its grid: for Berlin, grid_zero
-    (1730.32, 1717.07) with a 1300 m grid centres on (2380.32, 1067.07), and
-    the mission blk puts dom_battle_area_hardcore at (2380.3, 1067.1).
-    """
-    for area in layout.get("captures", []):
-        name = area.get("name", "")
-        if "battle_area" in name and name.endswith("_hardcore"):
-            return area["x"], area["z"]
-    return None
+
+def pick_areas(layout: dict, needle: str) -> list[dict]:
+    """Areas whose name contains `needle`, from the best available difficulty."""
+    areas = [a for a in layout.get("captures", [])
+             if needle in a.get("name", "") and not a.get("name", "").startswith("briefing_")]
+    for suffix in DIFFICULTY_SUFFIXES:
+        chosen = [a for a in areas if a["name"].endswith(suffix)]
+        if chosen:
+            return chosen
+    return []
+
+
+def battle_area_centre(layout: dict):
+    """Centre of the playable square, which is also the map image's centre."""
+    areas = pick_areas(layout, "battle_area")
+    return (areas[0]["x"], areas[0]["z"]) if areas else None
 
 
 def map_background(map_dir: Path, layout: dict):
@@ -149,12 +158,8 @@ def grid_lines(view: View, out: list[str]) -> None:
 
 
 def draw_layout(view: View, layout: dict, out: list[str]) -> None:
-    for cap in layout.get("captures", []):
-        name = cap.get("name", "")
-        if not name.endswith("_hardcore") or "capture_area" not in name:
-            continue
-        if name.startswith("briefing_"):
-            continue
+    for cap in pick_areas(layout, "capture_area"):
+        name = cap["name"]
         cx, cz = view.px(cap["x"]), view.py(cap["z"])
         out.append(f'<circle cx="{cx:.1f}" cy="{cz:.1f}" r="22" fill="none" '
                    f'stroke="{STYLE["cap"]}" stroke-width="2" stroke-dasharray="5 4"/>')
@@ -162,12 +167,9 @@ def draw_layout(view: View, layout: dict, out: list[str]) -> None:
         out.append(f'<text x="{cx:.1f}" y="{cz + 5:.1f}" fill="{STYLE["cap"]}" font-size="14" '
                    f'font-weight="600" text-anchor="middle">{esc(label)}</text>')
 
-    for cap in layout.get("captures", []):
-        name = cap.get("name", "")
-        if "tank_spawn" not in name or not name.endswith("_hardcore"):
-            continue
-        if name.startswith("briefing_"):
-            continue
+    spawns = pick_areas(layout, "tank_spawn") or pick_areas(layout, "killarea")
+    for cap in spawns:
+        name = cap["name"]
         colour = STYLE["spawn_t1"] if "t1_" in name else STYLE["spawn_t2"]
         cx, cz = view.px(cap["x"]), view.py(cap["z"])
         out.append(f'<rect x="{cx - 7:.1f}" y="{cz - 7:.1f}" width="14" height="14" '
@@ -242,10 +244,9 @@ def render(tracks: dict, layout: dict, meta: dict, background=None) -> str:
         for _, x, z in track["points"]:
             xs.append(x)
             zs.append(z)
-    for cap in layout.get("captures", []):
-        if cap.get("name", "").endswith("_hardcore") and not cap["name"].startswith("briefing_"):
-            xs.append(cap["x"])
-            zs.append(cap["z"])
+    for cap in pick_areas(layout, "capture_area") + pick_areas(layout, "tank_spawn"):
+        xs.append(cap["x"])
+        zs.append(cap["z"])
     if background is not None:
         xs += [background["min_x"], background["max_x"]]
         zs += [background["min_z"], background["max_z"]]
