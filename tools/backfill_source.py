@@ -42,6 +42,10 @@ def main() -> int:
     parser.add_argument("--wtresults", type=Path, default=Path("bin/wtresults.exe"))
     parser.add_argument("--speed", type=int, default=1,
                         help="playback speed these recordings were made at")
+    parser.add_argument("--for-replay",
+                        help="name the replay explicitly, matched as a filename "
+                             "substring. Needed for a live capture, whose folder "
+                             "carries its own label rather than a replay timestamp")
     parser.add_argument("--force", action="store_true", help="overwrite an existing source.json")
     args = parser.parse_args()
 
@@ -59,14 +63,25 @@ def main() -> int:
         target = recording / "source.json"
         if target.exists() and not args.force:
             continue
-        match = LABEL.search(recording.name[16:])  # skip the capture's own timestamp
-        replay = by_stamp.get(match.group(0)) if match else None
-        if replay is None:
-            print(f"  {recording.name}: no replay matches, skipping")
-            continue
+        if args.for_replay:
+            named = [r for r in by_stamp.values()
+                     if args.for_replay.lower() in r.name.lower()]
+            if len(named) != 1:
+                print(f"  {args.for_replay!r} matches {len(named)} replays; "
+                      f"be more specific")
+                continue
+            replay, label = named[0], replay_stamp(named[0]) or recording.name
+        else:
+            match = LABEL.search(recording.name[16:])  # skip the capture's own timestamp
+            replay = by_stamp.get(match.group(0)) if match else None
+            if replay is None:
+                print(f"  {recording.name}: no replay timestamp in the folder name. "
+                      f"For a live capture, pass --for-replay <filename>")
+                continue
+            label = match.group(0)
 
-        source = {"replay": str(replay), "label": match.group(0),
-                  "speed": args.speed, "prefix": match.group(0)}
+        source = {"replay": str(replay), "label": label,
+                  "speed": args.speed, "prefix": label}
         if args.wtresults.exists():
             result = subprocess.run([str(args.wtresults), "-json", str(replay)],
                                     capture_output=True, text=True, timeout=60,
