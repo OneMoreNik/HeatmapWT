@@ -12,3 +12,6 @@ bin/
 .DS_Store
 __pycache__/
 .venv/
+
+# Downloaded third-party map images
+data/maps/

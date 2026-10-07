@@ -14,6 +14,7 @@ drawing because SVG y grows downward.
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import json
 import math
@@ -40,6 +41,47 @@ STYLE = {
     "spawn_t1": "#4f9dff",
     "spawn_t2": "#ff5a4d",
 }
+
+
+def battle_area_centre(layout: dict) -> tuple[float, float] | None:
+    """Centre of the playable square, from the mission's battle area.
+
+    The client reports the same square as its grid: for Berlin, grid_zero
+    (1730.32, 1717.07) with a 1300 m grid centres on (2380.32, 1067.07), and
+    the mission blk puts dom_battle_area_hardcore at (2380.3, 1067.1).
+    """
+    for area in layout.get("captures", []):
+        name = area.get("name", "")
+        if "battle_area" in name and name.endswith("_hardcore"):
+            return area["x"], area["z"]
+    return None
+
+
+def map_background(map_dir: Path, layout: dict):
+    """Image bytes and world bounds for the map picture, or None.
+
+    wt-tools publishes the image and the size of the area it covers but not
+    where that area sits, so the centre comes from the mission file.
+    """
+    meta_path = map_dir / "map.json"
+    if not meta_path.exists():
+        return None
+    meta = json.loads(meta_path.read_text())
+    size = meta.get("size_m")
+    centre = battle_area_centre(layout)
+    if not size or centre is None:
+        return None
+    image_path = map_dir / meta["image"]
+    if not image_path.exists():
+        return None
+    cx, cz = centre
+    half = size / 2
+    return {
+        "data": image_path.read_bytes(),
+        "min_x": cx - half, "max_x": cx + half,
+        "min_z": cz - half, "max_z": cz + half,
+        "meta": meta,
+    }
 
 
 def esc(text: str) -> str:
@@ -90,7 +132,7 @@ def grid_lines(view: View, out: list[str]) -> None:
     while x <= view.max_x:
         px = view.px(x)
         out.append(f'<line x1="{px:.1f}" y1="{MARGIN_PX}" x2="{px:.1f}" '
-                   f'y2="{view.height - MARGIN_PX:.1f}" stroke="{STYLE["grid"]}" stroke-width="1"/>')
+                   f'y2="{view.height - MARGIN_PX:.1f}" stroke="{STYLE["grid"]}" stroke-width="1" stroke-opacity="0.35"/>')
         out.append(f'<text x="{px:.1f}" y="{view.height - MARGIN_PX + 18:.1f}" '
                    f'fill="{STYLE["muted"]}" font-size="11" text-anchor="middle">{int(x)}</text>')
         x += GRID_STEP_M
@@ -100,7 +142,7 @@ def grid_lines(view: View, out: list[str]) -> None:
     while z <= view.max_z:
         py = view.py(z)
         out.append(f'<line x1="{MARGIN_PX}" y1="{py:.1f}" x2="{view.width - MARGIN_PX:.1f}" '
-                   f'y2="{py:.1f}" stroke="{STYLE["grid"]}" stroke-width="1"/>')
+                   f'y2="{py:.1f}" stroke="{STYLE["grid"]}" stroke-width="1" stroke-opacity="0.35"/>')
         out.append(f'<text x="{MARGIN_PX - 8:.1f}" y="{py + 4:.1f}" fill="{STYLE["muted"]}" '
                    f'font-size="11" text-anchor="end">{int(z)}</text>')
         z += GRID_STEP_M
@@ -194,7 +236,7 @@ def legend(view: View, tracks: dict, meta: dict, out: list[str]) -> None:
                f'circle = route start, square = last seen</text>')
 
 
-def render(tracks: dict, layout: dict, meta: dict) -> str:
+def render(tracks: dict, layout: dict, meta: dict, background=None) -> str:
     xs, zs = [], []
     for track in tracks.values():
         for _, x, z in track["points"]:
@@ -204,6 +246,9 @@ def render(tracks: dict, layout: dict, meta: dict) -> str:
         if cap.get("name", "").endswith("_hardcore") and not cap["name"].startswith("briefing_"):
             xs.append(cap["x"])
             zs.append(cap["z"])
+    if background is not None:
+        xs += [background["min_x"], background["max_x"]]
+        zs += [background["min_z"], background["max_z"]]
     if not xs:
         raise SystemExit("nothing to draw")
 
@@ -216,6 +261,15 @@ def render(tracks: dict, layout: dict, meta: dict) -> str:
            f'<rect x="{MARGIN_PX}" y="{MARGIN_PX}" '
            f'width="{view.width - 2 * MARGIN_PX:.1f}" height="{view.height - 2 * MARGIN_PX:.1f}" '
            f'fill="{STYLE["panel"]}" stroke="{STYLE["axis"]}" stroke-width="1"/>']
+    if background is not None:
+        href = ("data:image/png;base64,"
+                + base64.b64encode(background["data"]).decode("ascii"))
+        x0 = view.px(background["min_x"])
+        y0 = view.py(background["max_z"])
+        width = (background["max_x"] - background["min_x"]) * PX_PER_M
+        height = (background["max_z"] - background["min_z"]) * PX_PER_M
+        out.append(f'<image href="{href}" x="{x0:.1f}" y="{y0:.1f}" '
+                   f'width="{width:.1f}" height="{height:.1f}" opacity="0.85"/>')
     grid_lines(view, out)
     draw_layout(view, layout, out)
     draw_tracks(view, tracks, out)
@@ -228,6 +282,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recording", type=Path)
     parser.add_argument("--layout", type=Path, help="data/levels/<map>_<layout>.json")
+    parser.add_argument("--map", type=Path, dest="map_dir",
+                        help="data/maps/<map>/<mode> directory with the map image")
     parser.add_argument("--out", type=Path, help="where to write the SVG")
     args = parser.parse_args()
 
@@ -242,8 +298,12 @@ def main() -> int:
         "subtitle": f"{len(tracks)} tracks, {samples} samples over {span:.0f}s  ·  "
                     f"recorded from the client map during replay playback",
     }
+    background = map_background(args.map_dir, layout) if args.map_dir else None
+    if args.map_dir and background is None:
+        print(f"no usable map image in {args.map_dir}; drawing without one")
+
     out_path = args.out or (args.recording / "tracks.svg")
-    out_path.write_text(render(tracks, layout, meta), encoding="utf-8")
+    out_path.write_text(render(tracks, layout, meta, background), encoding="utf-8")
     print(f"{len(tracks)} tracks, {samples} samples -> {out_path}")
     return 0
 
