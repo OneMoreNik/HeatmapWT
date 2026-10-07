@@ -34,6 +34,24 @@ def replay_stamp(path: Path) -> str | None:
     return f"{y}{mo}{d}-{h}{mi}{s}"
 
 
+def expand(paths: list[Path]) -> list[Path]:
+    """Expand wildcards ourselves.
+
+    bash expands `data/live/*/` before the script sees it; PowerShell and cmd
+    do not, and pass the literal string. Doing it here makes the same command
+    work in any shell.
+    """
+    out: list[Path] = []
+    for item in paths:
+        text = str(item)
+        if any(ch in text for ch in "*?["):
+            matched = sorted(Path().glob(text.replace("\\", "/").rstrip("/")))
+            out.extend(m for m in matched if m.is_dir())
+        else:
+            out.append(item)
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recordings", nargs="+", type=Path)
@@ -48,6 +66,7 @@ def main() -> int:
                              "carries its own label rather than a replay timestamp")
     parser.add_argument("--force", action="store_true", help="overwrite an existing source.json")
     args = parser.parse_args()
+    args.recordings = expand(args.recordings)
 
     by_stamp: dict[str, Path] = {}
     for folder in args.replays:
