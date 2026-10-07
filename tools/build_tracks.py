@@ -136,14 +136,16 @@ def read_frames(csv_path: Path, mapping: WorldMapping):
         yield times[frame], frames[frame]
 
 
-OWN_SIDE = {"ally", "squad", "player"}
+# Squad and team mates share a side and a vehicle can move between those
+# groups, so their tracks may be joined. The spectated vehicle is deliberately
+# not in this set: it has a colour of its own, so letting it match a team mate
+# only ever lets the two steal each other's samples.
+INTERCHANGEABLE = {"ally", "squad"}
 
 
 def compatible(track: Track, obs: dict) -> bool:
     if track.team != obs["team"]:
-        # Your own vehicle and your squad are drawn in their own colours but
-        # are the same side, and a vehicle can move between those groups.
-        if not (track.team in OWN_SIDE and obs["team"] in OWN_SIDE):
+        if not (track.team in INTERCHANGEABLE and obs["team"] in INTERCHANGEABLE):
             return False
     # The player's own vehicle is drawn with its own icon, so let that match
     # any class; otherwise a vehicle keeps its class for its whole life.
@@ -215,11 +217,20 @@ def write_tracks(out_path: Path, tracks: list[Track]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recording", type=Path, help="a data/live/<recording> directory")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="replay playback speed used while recording, so wall-clock "
+                             "timestamps become battle seconds")
     args = parser.parse_args()
 
     info = json.loads((args.recording / "map_info.json").read_text())
     mapping = WorldMapping(info)
     tracks = stitch(read_frames(args.recording / "map_obj.csv", mapping))
+
+    # Recording a replay played back at speed compresses wall-clock time;
+    # rescale so timestamps, speeds and dwell times are in battle seconds.
+    if args.speed != 1.0:
+        for track in tracks:
+            track.samples = [(t * args.speed, x, z) for t, x, z in track.samples]
 
     out_path = args.recording / "tracks.csv"
     write_tracks(out_path, tracks)
