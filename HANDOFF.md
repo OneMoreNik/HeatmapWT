@@ -487,6 +487,11 @@ Mechanics worth knowing:
   after.
 - It reads only the HTTP endpoint the game already serves to its own web map. No
   memory, no files, no input.
+- **A battle on a map with nothing recorded clears the overlay rather than
+  leaving the previous map up.** Showing the last map would be worse than
+  showing nothing: it is a different place, drawn as if it were this one. The
+  library is also re-read before concluding there is no heatmap, so a map built
+  while the overlay is running is picked up without restarting it.
 
 ## Next steps, in order
 

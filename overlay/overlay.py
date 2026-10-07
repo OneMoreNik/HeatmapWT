@@ -61,7 +61,7 @@ MAGIC_HEX = "#010203"
 DEFAULT_CONFIG = {
     "alpha": 0.45,
     "rects": {
-        "map": [610, 190, 700, 700],
+        "map": [510, 90, 900, 900],
         "minimap": [1570, 700, 340, 340],
     },
     "hotkeys": {"map": "Q", "minimap": "E", "cycle": "R", "hide": "D"},
@@ -295,18 +295,27 @@ class Overlay:
             square = live_square(info)
             if square:
                 found = self.library.match(*square)
+                if found is None:
+                    # Could be a map recorded since this started running.
+                    self.library.reload()
+                    found = self.library.match(*square)
                 name = found["prefix"] if found else None
+
                 # Switch only on a reading seen twice. The client briefly
                 # reports a different grid around a map change -- one Berlin
                 # Conquest-2 capture starts with a 1700 m grid before settling
                 # to the real 1300 m one -- and a single frame of that would
                 # swap the map under you.
-                if name and name == self.candidate:
-                    if self.entry is None or name != self.entry["prefix"]:
-                        self.entry = found
-                        self.class_index = 0
-                        if self.mode:
-                            self.show(self.mode)
+                if name == self.candidate and name != (
+                        self.entry["prefix"] if self.entry else None):
+                    # None twice over means a battle on a map with no heatmap.
+                    # Leaving the previous one up would be worse than showing
+                    # nothing: it is a different place, drawn as if it were this
+                    # one.
+                    self.entry = found
+                    self.class_index = 0
+                    if self.mode:
+                        self.show(self.mode)
                 self.candidate = name
         self.root.after(POLL_MS, self.poll_game)
 
@@ -355,8 +364,8 @@ class Overlay:
         if self.entry is None:
             self.library.reload()
             self.root.withdraw()
-            self.say("HeatmapWT: waiting for a battle "
-                     "(no map recognised on 127.0.0.1:8111)", x, y)
+            self.say("HeatmapWT: no heatmap for this map "
+                     "(nothing recorded here yet, or no battle running)", x, y)
             return
 
         vclass = self.current_class()
@@ -401,13 +410,12 @@ class Calibrator:
         self.canvas = tk.Canvas(self.root, highlightthickness=2,
                                 highlightbackground="#4ad0ff", bg="#101820", bd=0)
         self.canvas.pack(fill="both", expand=True)
-        self.canvas.create_text(
+        self.text = self.canvas.create_text(
             width // 2, height // 2, fill="#e6ecf2", width=width - 40,
-            justify="center", font=("Segoe UI", 11),
-            text=f"Drag onto the {mode}.\n\n"
-                 f"Drag inside to move  ·  drag the bottom-right corner to resize\n"
-                 f"Arrow keys nudge  ·  Shift+arrows resize\n\n"
-                 f"Enter saves   Esc cancels")
+            justify="center", font=("Segoe UI", 11), text="")
+        self.grip = self.canvas.create_rectangle(0, 0, 0, 0, outline="#4ad0ff",
+                                                 fill="#4ad0ff", width=0)
+        self.refresh()
 
         self.drag = None
         self.canvas.bind("<Button-1>", self.press)
@@ -419,6 +427,19 @@ class Calibrator:
         self.root.update_idletasks()
         return (self.root.winfo_x(), self.root.winfo_y(),
                 self.root.winfo_width(), self.root.winfo_height())
+
+    def refresh(self) -> None:
+        """Keep the size on screen: resizing blind is the slow way to do this."""
+        x, y, width, height = self.geometry()
+        self.canvas.coords(self.text, width // 2, height // 2)
+        self.canvas.itemconfigure(
+            self.text, width=max(120, width - 40),
+            text=f"{self.mode}\n\n"
+                 f"{width} x {height}  at  {x}, {y}\n\n"
+                 f"Drag inside to move  ·  drag the corner to resize\n"
+                 f"Arrows nudge  ·  Shift+arrows by 10  ·  Ctrl+Shift+arrows by 50\n\n"
+                 f"Enter saves   Esc cancels")
+        self.canvas.coords(self.grip, width - 26, height - 26, width - 2, height - 2)
 
     def press(self, event) -> None:
         _, _, width, height = self.geometry()
@@ -434,22 +455,25 @@ class Calibrator:
         if kind == "move":
             self.root.geometry(f"{width}x{height}+{x + dx}+{y + dy}")
         else:
-            side = max(60, width + dx, height + dy)
+            side = max(120, width + max(dx, dy))
             self.root.geometry(f"{side}x{side}+{x}+{y}")
+        self.refresh()
 
     def key(self, event) -> None:
         x, y, width, height = self.geometry()
-        step = 10 if event.state & 0x0004 else 1
         shift = bool(event.state & 0x0001)
+        control = bool(event.state & 0x0004)
+        step = (50 if control else 10) if shift else (10 if control else 1)
         moves = {"Left": (-step, 0), "Right": (step, 0),
                  "Up": (0, -step), "Down": (0, step)}
         if event.keysym in moves:
             dx, dy = moves[event.keysym]
             if shift:
-                side = max(60, width + dx + dy)
+                side = max(120, width + dx + dy)
                 self.root.geometry(f"{side}x{side}+{x}+{y}")
             else:
                 self.root.geometry(f"{width}x{height}+{x + dx}+{y + dy}")
+            self.refresh()
         elif event.keysym == "Return":
             self.config["rects"][self.mode] = list(self.geometry())
             save_config(self.config)
