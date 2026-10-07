@@ -8,23 +8,42 @@
     "Positions were read off the Russian client; the automation never reads",
     "text, so the interface language does not matter."
   ],
-  "screen": { "width": 1920, "height": 1080 },
-
-  "hangar": {
-    "community_menu": { "x": 254, "y": 33, "note": "Сообщество in the top bar" },
-    "community_replays": { "x": 310, "y": 123, "note": "Повторы, third item in the dropdown" }
+  "screen": {
+    "width": 1920,
+    "height": 1080
   },
-
+  "hangar": {
+    "community_menu": {
+      "x": 254,
+      "y": 33,
+      "note": "\u0421\u043e\u043e\u0431\u0449\u0435\u0441\u0442\u0432\u043e in the top bar"
+    },
+    "community_replays": {
+      "x": 310,
+      "y": 123,
+      "note": "\u041f\u043e\u0432\u0442\u043e\u0440\u044b, third item in the dropdown"
+    }
+  },
   "replay_dialog": {
-    "title": { "x": 289, "y": 135 },
-    "close": { "x": 1661, "y": 135 },
-    "watch_button": { "x": 1592, "y": 905, "note": "Посмотреть повтор" },
+    "title": {
+      "x": 289,
+      "y": 135
+    },
+    "close": {
+      "x": 1661,
+      "y": 135
+    },
+    "watch_button": {
+      "x": 1592,
+      "y": 905,
+      "note": "\u041f\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u043f\u043e\u0432\u0442\u043e\u0440"
+    },
     "list": {
       "x": 400,
       "first_y": 172,
       "row_height": 30,
-      "visible_rows": 8,
-      "note": "Replay list, newest first. Rows beyond visible_rows need scrolling."
+      "visible_rows": 20,
+      "note": "Replay list, newest first. The panel holds about 23 rows before it scrolls; rows beyond visible_rows are refused rather than clicked blind."
     },
     "scoreboard": {
       "first_y": 445,
@@ -33,20 +52,36 @@
       "note": "Players sorted by score. Read offline with wtresults instead."
     }
   },
-
   "replay_view": {
-    "speed_up": { "x": 1160, "y": 27, "note": "the >> button; each click doubles" },
-    "speed_down": { "x": 1063, "y": 27, "note": "the << button" },
-    "speed_label": { "x": 1122, "y": 27, "note": "reads 1.000x / 16.000x" },
-    "pause": { "x": 1221, "y": 27 },
+    "speed_up": {
+      "x": 1058,
+      "y": 27,
+      "note": "the >> button; each click doubles"
+    },
+    "speed_down": {
+      "x": 968,
+      "y": 27,
+      "note": "the << button"
+    },
+    "speed_label": {
+      "x": 1012,
+      "y": 27,
+      "w": 70,
+      "h": 22,
+      "note": "reads 1.000x / 16.000x; compared before and after to confirm a speed change"
+    },
+    "pause": {
+      "x": 1119,
+      "y": 27
+    },
     "player_list": {
       "x": 200,
       "first_y": 62,
       "row_height": 42,
       "note": "Order is live and reorders during the battle, so a row index cannot reliably pick a named player. The replay opens on its author, which is who we follow."
-    }
+    },
+    "_toolbar_note": "The replay toolbar is centre-anchored and its width changes with which controls are shown, so these x positions shift between sessions. Measured on a bar without the vehicle-number buttons; a bar with them sits about 78 px further right. The automation checks the speed label actually changed rather than trusting them."
   },
-
   "timings": {
     "after_click_s": 0.45,
     "menu_open_s": 1.2,

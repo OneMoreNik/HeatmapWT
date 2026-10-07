@@ -28,6 +28,7 @@ import ctypes
 import json
 import subprocess
 import sys
+import tempfile
 import time
 from ctypes import wintypes
 from pathlib import Path
@@ -102,6 +103,37 @@ class Screen:
         user32.GetCursorPos(ctypes.byref(pos))
         return pos.x <= 2 and pos.y <= 2
 
+    def _move(self, x: int, y: int) -> None:
+        ax = int(x * 65535 / max(self.width - 1, 1))
+        ay = int(y * 65535 / max(self.height - 1, 1))
+        event = INPUT(type=INPUT_MOUSE,
+                      mi=MOUSEINPUT(ax, ay, 0,
+                                    MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0, None))
+        user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+
+    def region_png(self, region: dict) -> bytes | None:
+        """PNG bytes of a screen region, for before/after comparison.
+
+        Used to tell whether a click actually did anything: the speed label
+        is either identical to before, meaning the button was missed, or it
+        is not. Cheaper and far more robust than reading the text.
+        """
+        if self.dry_run:
+            return None
+        x, y = self.to_screen(region)
+        w = int(region.get("w", 60) * self.scale_x)
+        h = int(region.get("h", 20) * self.scale_y)
+        out = Path(tempfile.gettempdir()) / f"wt-region-{x}-{y}.png"
+        script = Path(__file__).with_name("crop.ps1")
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+             "-X", str(x - w // 2), "-Y", str(y - h // 2), "-W", str(w), "-H", str(h),
+             "-Out", str(out)],
+            capture_output=True, timeout=60)
+        if result.returncode != 0 or not out.exists():
+            return None
+        return out.read_bytes()
+
     def shot(self, tag: str) -> None:
         """Capture the screen, so a misfire can be seen rather than guessed at."""
         if self.shots_dir is None:
@@ -141,14 +173,18 @@ class Screen:
             raise RuntimeError(
                 "the game is not the foreground window; refusing to click, "
                 "since the input would go to whatever is in front instead")
-        ax = int(x * 65535 / max(self.width - 1, 1))
-        ay = int(y * 65535 / max(self.height - 1, 1))
-        for flags in (MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
-                      MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP):
+        # Repeated clicks on the same pixel get swallowed: four presses of the
+        # speed button only advanced it one step. Moving away and back makes
+        # each one a fresh hover, and the button then registers every time.
+        self._move(self.width // 2, self.height - 4)
+        time.sleep(0.05)
+        self._move(x, y)
+        time.sleep(0.12)
+        for flags in (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP):
             event = INPUT(type=INPUT_MOUSE,
-                          mi=MOUSEINPUT(ax, ay, 0, flags, 0, None))
+                          mi=MOUSEINPUT(0, 0, 0, flags, 0, None))
             user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
-            time.sleep(0.03)
+            time.sleep(0.06)
         print(f"    click ({x},{y}) {note}", flush=True)
         time.sleep(self.layout["timings"]["after_click_s"])
         self.shot(f"click-{x}-{y}")
@@ -252,7 +288,8 @@ def wait_for(api: Api, want_live: bool, timeout: float, what: str) -> bool:
 
 
 def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
-             label: str, record_hz: float, out_dir: Path) -> bool:
+             label: str, record_hz: float, out_dir: Path,
+             open_menu: bool = True) -> bool:
     layout = screen.layout
     timings = layout["timings"]
     hangar, dialog, view = layout["hangar"], layout["replay_dialog"], layout["replay_view"]
@@ -263,10 +300,13 @@ def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
               f"scrolling is not implemented")
         return False
 
-    screen.click(hangar["community_menu"])
-    time.sleep(timings["menu_open_s"])
-    screen.click(hangar["community_replays"])
-    time.sleep(timings["dialog_open_s"])
+    # A finished replay drops back into the Replays dialog, so it only needs
+    # opening for the first one of a run.
+    if open_menu:
+        screen.click(hangar["community_menu"])
+        time.sleep(timings["menu_open_s"])
+        screen.click(hangar["community_replays"])
+        time.sleep(timings["dialog_open_s"])
 
     screen.click({"x": listing["x"],
                   "y": listing["first_y"] + row * listing["row_height"],
@@ -284,9 +324,17 @@ def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
     try:
         if not wait_for(api, True, timings["replay_load_timeout_s"], "the replay to load"):
             return False
-        print("    replay running; setting playback speed")
-        for _ in range(speed_clicks):
-            screen.click(view["speed_up"])
+        if speed_clicks:
+            print("    replay running; setting playback speed")
+            before = screen.region_png(view["speed_label"])
+            for _ in range(speed_clicks):
+                screen.click(view["speed_up"])
+            after = screen.region_png(view["speed_label"])
+            if before is not None and before == after:
+                print("    WARNING: the speed label did not change, so the >> button was "
+                      "missed; continuing at 1x. Re-measure replay_view.speed_up.")
+        else:
+            print("    replay running at 1x")
 
         start = time.monotonic()
         while map_is_live(api.get("map_info.json")):
@@ -294,12 +342,10 @@ def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
                 raise KeyboardInterrupt("pointer parked in the top-left corner")
             time.sleep(2.0)
         print(f"    battle ended after {time.monotonic() - start:.0f}s of playback")
+        # Esc is deliberately not pressed: inside a replay it switches the
+        # spectated player rather than exiting, and a finished replay returns
+        # to the Replays dialog on its own.
         time.sleep(timings["battle_end_grace_s"])
-        # A finished replay leaves the client on the results screen, not the
-        # hangar, so the next run's menu clicks would land on nothing.
-        for _ in range(3):
-            screen.press(VK_ESCAPE, "Esc to leave the results screen")
-            time.sleep(1.5)
     finally:
         recorder.terminate()
         try:
@@ -317,8 +363,10 @@ def main() -> int:
     parser.add_argument("--wtresults", type=Path, default=Path("bin/wtresults.exe"))
     parser.add_argument("--out", type=Path, default=Path("data/live"))
     parser.add_argument("--rows", default="0", help="comma-separated row numbers, newest first")
-    parser.add_argument("--speed", type=int, default=16,
-                        help="playback speed; reached by doubling from 1x")
+    parser.add_argument("--speed", type=int, default=1,
+                        help="playback speed, reached by doubling from 1x. The default "
+                             "of 1 skips the speed button entirely: nobody is waiting on "
+                             "an unattended run, and 1x gives far denser samples")
     parser.add_argument("--hz", type=float, default=20.0, help="recording rate")
     parser.add_argument("--list", action="store_true", help="list replays with their row numbers")
     parser.add_argument("--dry-run", action="store_true",
@@ -358,6 +406,7 @@ def main() -> int:
     print("abort by moving the pointer to the top-left corner\n")
 
     done = 0
+    need_menu = True
     try:
         for row in rows:
             if row >= len(replays):
@@ -366,13 +415,16 @@ def main() -> int:
             replay = replays[row]
             print(f"row {row}: {describe(replay, args.wtresults)}")
             label = replay.stem.strip("#").replace(" ", "-").replace(".", "")
-            if play_one(screen, api, row, speed_clicks, label, args.hz, args.out):
+            if play_one(screen, api, row, speed_clicks, label, args.hz, args.out,
+                        open_menu=need_menu):
                 done += 1
-            if not args.dry_run:
-                time.sleep(layout["timings"]["return_to_hangar_s"])
-                if not wait_for(api, False, 60, "the hangar"):
-                    print("still in a battle; stopping rather than clicking blind")
-                    break
+                need_menu = False
+            else:
+                # Something went wrong, so do not assume where the UI is.
+                need_menu = True
+            if not args.dry_run and not wait_for(api, False, 60, "the replay list"):
+                print("still in a replay; stopping rather than clicking blind")
+                break
     except KeyboardInterrupt:
         print("\naborted")
     finally:
