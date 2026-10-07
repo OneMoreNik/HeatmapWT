@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "Screen positions of the War Thunder menu elements the automation clicks,",
+    "taken from 1920x1080 screenshots. Coordinates are stored as fractions of",
+    "the screen so they survive a different resolution, but the layout itself",
+    "is not guaranteed to scale, so check with --dry-run --shot after any",
+    "resolution or UI change.",
+    "Positions were read off the Russian client; the automation never reads",
+    "text, so the interface language does not matter."
+  ],
+  "screen": { "width": 1920, "height": 1080 },
+
+  "hangar": {
+    "community_menu": { "x": 254, "y": 33, "note": "Сообщество in the top bar" },
+    "community_replays": { "x": 310, "y": 123, "note": "Повторы, third item in the dropdown" }
+  },
+
+  "replay_dialog": {
+    "title": { "x": 289, "y": 135 },
+    "close": { "x": 1661, "y": 135 },
+    "watch_button": { "x": 1592, "y": 905, "note": "Посмотреть повтор" },
+    "list": {
+      "x": 400,
+      "first_y": 172,
+      "row_height": 30,
+      "visible_rows": 8,
+      "note": "Replay list, newest first. Rows beyond visible_rows need scrolling."
+    },
+    "scoreboard": {
+      "first_y": 445,
+      "row_height": 30,
+      "name_x": 786,
+      "note": "Players sorted by score. Read offline with wtresults instead."
+    }
+  },
+
+  "replay_view": {
+    "speed_up": { "x": 1160, "y": 27, "note": "the >> button; each click doubles" },
+    "speed_down": { "x": 1063, "y": 27, "note": "the << button" },
+    "speed_label": { "x": 1122, "y": 27, "note": "reads 1.000x / 16.000x" },
+    "pause": { "x": 1221, "y": 27 },
+    "player_list": {
+      "x": 200,
+      "first_y": 62,
+      "row_height": 42,
+      "note": "Order is live and reorders during the battle, so a row index cannot reliably pick a named player. The replay opens on its author, which is who we follow."
+    }
+  },
+
+  "timings": {
+    "after_click_s": 0.45,
+    "menu_open_s": 1.2,
+    "dialog_open_s": 2.0,
+    "replay_load_timeout_s": 120,
+    "battle_end_grace_s": 25,
+    "return_to_hangar_s": 20
+  }
+}
