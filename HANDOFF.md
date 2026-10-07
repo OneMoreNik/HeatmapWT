@@ -233,15 +233,23 @@ What has been checked end to end, on four battles across three maps:
 
 ## Recording a live battle
 
-The recorder does not care whether a map comes from a replay or a live battle,
-so your own battles can be captured as they happen:
+`collector/sample_map.py` is the recorder: it polls the client's local API and
+writes down every unit drawn on the map. **It is normally not run by hand** —
+`auto_replay.py` starts and stops it around each replay. Running it directly is
+for capturing a live battle as you play it:
 
 ```bash
 python collector/sample_map.py --hz 20 --label my-battle
 ```
 
-It waits for a map, records, and splits per battle. Afterwards, attach a
-source.json with `tools/backfill_source.py` and run `process_recording.py`.
+It records nothing until a map exists, so start it, then start the battle. It
+prints a line every 10 seconds while waiting, because silence looks identical
+to a hang. When the battle ends it writes the folder and goes back to waiting;
+stop it with Ctrl-C.
+
+Afterwards, attach a source.json with `tools/backfill_source.py` and run
+`process_recording.py`. The replay the battle produced has to exist for that,
+so let the client autosave it first.
 
 **Never run `auto_replay.py` while a battle is live.** It automates the replay
 browser in the menus, which is not gameplay; pointing it at a live battle would

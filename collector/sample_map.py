@@ -194,8 +194,11 @@ def record(out_dir: Path, label: str, hz: float) -> None:
     period = 1.0 / hz
     api = Api()
     current: Recording | None = None
-    print(f"polling localhost:{PORT} at {hz:g} Hz. Ctrl-C to stop.")
-    print("waiting for a map...")
+    print(f"polling {HOST}:{PORT} at {hz:g} Hz. Ctrl-C to stop.")
+    print("Nothing is recorded until a battle or replay is running: start one and")
+    print("this will pick it up by itself.")
+    waiting_since = time.monotonic()
+    last_note = 0.0
 
     info_checked = 0.0
     info = None
@@ -214,9 +217,19 @@ def record(out_dir: Path, label: str, hz: float) -> None:
                     current.close()
                     current = None
                     print("map gone; waiting for the next one...")
+                    waiting_since = time.monotonic()
+                    last_note = 0.0
                 info = None
+                # Say something periodically: silence while waiting is
+                # indistinguishable from being hung.
+                waited = time.monotonic() - waiting_since
+                if waited - last_note >= 10.0:
+                    last_note = waited
+                    print(f"  waiting for a battle or replay... {waited:.0f}s", flush=True)
                 time.sleep(1.0)
                 continue
+
+            last_note = 0.0
 
             # A new battle bumps map_generation, so each one gets its own file.
             if current is None or info.get("map_generation", "?") != current.generation:
