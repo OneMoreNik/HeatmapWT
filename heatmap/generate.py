@@ -258,6 +258,10 @@ def main() -> int:
         "counts": {
             "battles": len(args.tracks), "vehicles": stats["tracks"],
             "samples": stats["samples"], "vehicle_seconds": round(stats["seconds"], 1),
+            # Samples that landed in the square. Short of "samples" means
+            # part of the data falls outside what is being drawn, which is
+            # how combining two layouts of one map shows up.
+            "placed": stats["placed"],
         },
     }
     out_path.with_suffix(".json").write_text(json.dumps(sidecar, indent=2))

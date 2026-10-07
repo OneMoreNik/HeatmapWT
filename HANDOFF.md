@@ -87,8 +87,13 @@ python collector/auto_replay.py --list
 # play and record (1x by default; add --speed 16 to go fast)
 python collector/auto_replay.py --rows 0,1,2
 
-# turn captures into heatmaps
+# turn captures into heatmaps, one per battle
 python tools/process_recording.py data/live/*/ --skip-existing
+
+# what has been recorded, and one heatmap per map+layout across every battle
+python tools/build_map.py --list
+python tools/build_map.py
+python tools/build_map.py --by-map       # mixes layouts, keeps the terrain
 
 # give an unpublished map a background, from a minimap screenshot
 python tools/import_map_image.py maps/<shot>.png --recording data/live/<capture>
@@ -202,6 +207,12 @@ Each of these cost real time; none are obvious.
   stretches the image by 20% and skews every track with it. `client_grid_size()`
   in `tools/process_recording.py` checks the tile first, then falls back to
   rejecting the whole-map shape when nothing is published to compare against.
+- **Count battles by `sessionId`, not by capture folder.** The same battle can
+  be recorded more than once -- replaying a replay to test a change does exactly
+  that. Two Berlin Conquest-2 captures on disk are one battle, session
+  `127b00490002868f`, and left in it would count twice towards the confidence
+  the viewer reports and weigh twice as heavily in the density. `build_map.py`
+  keeps the longest capture of each session.
 - **Take the battle area's centre from the client, not from the mission's
   names.** A mission offers several battle areas and nothing in the naming says
   which one is live. Berlin's client grid matches `dom_battle_area_hardcore` to
@@ -403,6 +414,30 @@ be tied to a vehicle model or player. Component ids are **FNV-1a 32-bit** of
 the component name — verified against all 6647 known pairs, with no other
 candidate hash matching one. The types would come from the game's template
 BLKs, which are now readable.
+
+## Using it
+
+`process_recording.py` makes one heatmap per battle, which is what to look at
+when checking a capture worked. `build_map.py` makes one per map and layout out
+of every battle recorded there, which is what to look at before playing:
+
+```bash
+python tools/build_map.py --list          # inventory, and which maps repeat
+python tools/build_map.py                 # one heatmap per map+layout
+python tools/build_map.py berlin_Conq2    # just one
+python tools/build_map.py --by-map        # every layout of a map together
+```
+
+The layout is the unit, not the map: `berlin_Dom` and `berlin_Conq2` have
+different capture points and a square 118 m apart, so stacking them averages two
+different battles. `--by-map` does it anyway, which mixes the objectives but
+keeps the terrain -- the roads people take, the ridges they stop behind -- and
+reports what share of the samples fit the square so a bad mix is visible rather
+than silent. Berlin across both layouts draws 98.5%.
+
+One battle per layout is not a heatmap, it is a single battle drawn in colour.
+Five or six on the same map and mode is where a hot spot starts to mean "people
+go here" rather than "someone went here once".
 
 ## Next steps, in order
 

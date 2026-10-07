@@ -227,26 +227,18 @@ def client_square(info: dict, map_meta: dict | None
     return max(width, height), centre
 
 
-def process(recording: Path, args) -> bool:
-    source_path = recording / "source.json"
-    if not source_path.exists():
-        print(f"{recording}: no source.json, skipping "
-              f"(only recordings made by auto_replay carry one)")
-        return False
-    source = json.loads(source_path.read_text(encoding="utf-8"))
-    name = f"{layout_key(source['battleType'])[0]}-{layout_key(source['battleType'])[1]}"
-    prefix = source.get("prefix") or f"{name}-{recording.name[:15]}"
+def resolve_geometry(source: dict, recording: Path, args
+                     ) -> tuple[Path, Path | None, float, tuple[float, float]] | None:
+    """(layout file, map image dir or None, square size, square centre).
 
-    print(f"{recording}  [{source['battleType']}]")
-    if args.skip_existing and (args.heatmaps / f"{prefix}.html").exists():
-        print("  already processed")
-        return True
-
+    Everything that decides *where in the world* a battle gets drawn. Factored
+    out so that combining several battles onto one map answers these questions
+    exactly the way a single one does.
+    """
     layout = ensure_layout(source, args.levels)
     if layout is None:
         print("  no layout geometry; cannot place anything on a map")
-        return False
-
+        return None
     map_dir = ensure_map(source, args.maps)
 
     info = json.loads((recording / "map_info.json").read_text(encoding="utf-8"))
@@ -256,7 +248,7 @@ def process(recording: Path, args) -> bool:
     zero = info.get("grid_zero") or []
     grid = info.get("grid_size") or []
 
-    def raw_square() -> tuple[float, tuple[float, float]] | None:
+    def raw_square():
         """The client's square taken at face value, whatever shape it is."""
         if len(grid) < 2 or not grid[0] or not grid[1] or len(zero) < 2:
             return None
@@ -304,7 +296,70 @@ def process(recording: Path, args) -> bool:
                   f"{size_m:.0f} m grid instead")
         else:
             print("  no map image and no usable grid size; cannot continue")
-            return False
+            return None
+    return layout, map_dir, size_m, centre
+
+
+def render_set(tracks, layout, map_dir, size_m, centre, prefix, heatmaps,
+               battle_type: str) -> int:
+    """Every class and weighting for one or more battles, plus the viewer."""
+    heatmaps.mkdir(parents=True, exist_ok=True)
+
+    def place(cmd: list) -> list:
+        if map_dir:
+            cmd += ["--map", map_dir]
+        if size_m:
+            cmd += ["--size", size_m]
+        if centre:
+            cmd += ["--centre", f"{centre[0]},{centre[1]}"]
+        return cmd
+
+    made = 0
+    for vclass in CLASSES:
+        cmd = place([sys.executable, "heatmap/generate.py", *tracks,
+                     "--layout", layout, "--out", heatmaps / f"{prefix}-{vclass}.png"])
+        if vclass != "all":
+            cmd += ["--class", vclass]
+        made += run(cmd, what=f"heatmap {vclass}").returncode == 0
+    for weighting in WEIGHTINGS:
+        cmd = place([sys.executable, "heatmap/generate.py", *tracks, "--layout", layout,
+                     "--mode", weighting,
+                     "--out", heatmaps / f"{prefix}-{weighting}.png"])
+        made += run(cmd, what=f"heatmap {weighting}").returncode == 0
+    if made == 0:
+        print("  no heatmaps produced")
+        return 0
+
+    viewer_dir = map_dir or (Path("data/maps") / layout_key(battle_type)[0]
+                             / wt_tools_mode(layout_key(battle_type)[1]))
+    viewer_dir.mkdir(parents=True, exist_ok=True)
+    viewer = heatmaps / f"{prefix}.html"
+    if run([sys.executable, "tools/build_viewer.py", viewer_dir, "--heatmaps", heatmaps,
+            "--prefix", prefix, "--out", viewer], what="viewer").returncode != 0:
+        return 0
+    print(f"  {made} heatmaps -> {viewer}")
+    return made
+
+
+def process(recording: Path, args) -> bool:
+    source_path = recording / "source.json"
+    if not source_path.exists():
+        print(f"{recording}: no source.json, skipping "
+              f"(only recordings made by auto_replay carry one)")
+        return False
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    name = f"{layout_key(source['battleType'])[0]}-{layout_key(source['battleType'])[1]}"
+    prefix = source.get("prefix") or f"{name}-{recording.name[:15]}"
+
+    print(f"{recording}  [{source['battleType']}]")
+    if args.skip_existing and (args.heatmaps / f"{prefix}.html").exists():
+        print("  already processed")
+        return True
+
+    resolved = resolve_geometry(source, recording, args)
+    if resolved is None:
+        return False
+    layout, map_dir, size_m, centre = resolved
 
     speed = source.get("speed", 1)
     group = battle_group(recording)
@@ -319,7 +374,6 @@ def process(recording: Path, args) -> bool:
         print("  no tracks produced")
         return False
 
-    args.heatmaps.mkdir(parents=True, exist_ok=True)
     plot = [sys.executable, "tools/plot_tracks.py", recording, "--layout", layout,
             "--out", args.heatmaps / f"{prefix}-tracks.svg"]
     if map_dir:
@@ -330,44 +384,8 @@ def process(recording: Path, args) -> bool:
         plot += ["--centre", f"{centre[0]},{centre[1]}"]
     run(plot, what="track plot")
 
-    tracks = recording / "tracks.csv"
-    made = 0
-    for vclass in CLASSES:
-        cmd = [sys.executable, "heatmap/generate.py", tracks,
-               "--layout", layout, "--out", args.heatmaps / f"{prefix}-{vclass}.png"]
-        if map_dir:
-            cmd += ["--map", map_dir]
-        if size_m:
-            cmd += ["--size", size_m]
-        if centre:
-            cmd += ["--centre", f"{centre[0]},{centre[1]}"]
-        if vclass != "all":
-            cmd += ["--class", vclass]
-        made += run(cmd, what=f"heatmap {vclass}").returncode == 0
-    for weighting in WEIGHTINGS:
-        cmd = [sys.executable, "heatmap/generate.py", tracks, "--layout", layout,
-               "--mode", weighting,
-               "--out", args.heatmaps / f"{prefix}-{weighting}.png"]
-        if map_dir:
-            cmd += ["--map", map_dir]
-        if size_m:
-            cmd += ["--size", size_m]
-        if centre:
-            cmd += ["--centre", f"{centre[0]},{centre[1]}"]
-        made += run(cmd, what=f"heatmap {weighting}").returncode == 0
-    if made == 0:
-        print("  no heatmaps produced")
-        return False
-
-    viewer = args.heatmaps / f"{prefix}.html"
-    viewer_dir = map_dir or (args.maps / layout_key(source["battleType"])[0]
-                             / wt_tools_mode(layout_key(source["battleType"])[1]))
-    viewer_dir.mkdir(parents=True, exist_ok=True)
-    if run([sys.executable, "tools/build_viewer.py", viewer_dir, "--heatmaps", args.heatmaps,
-            "--prefix", prefix, "--out", viewer], what="viewer").returncode != 0:
-        return False
-    print(f"  {made} heatmaps -> {viewer}")
-    return True
+    return render_set([recording / "tracks.csv"], layout, map_dir, size_m, centre,
+                      prefix, args.heatmaps, source["battleType"]) > 0
 
 
 def expand(paths: list[Path]) -> list[Path]:
