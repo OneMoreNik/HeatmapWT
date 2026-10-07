@@ -80,7 +80,13 @@
       "row_height": 42,
       "note": "The in-replay player list is that team's players in the order the results block stores them, so a row can be computed offline with bin/wtresults.exe. UNVERIFIED GEOMETRY: first_y and row_height were read off a compressed screenshot and have never been clicked. Check with --shots before trusting --follow."
     },
-    "_toolbar_note": "The replay toolbar is centre-anchored and its width changes with which controls are shown, so these x positions shift between sessions. Measured on a bar without the vehicle-number buttons; a bar with them sits about 78 px further right. The automation checks the speed label actually changed rather than trusting them."
+    "_toolbar_note": "The replay toolbar is centre-anchored and its width changes with which controls are shown, so these x positions shift between sessions. Measured on a bar without the vehicle-number buttons; a bar with them sits about 78 px further right. The automation checks the speed label actually changed rather than trusting them.",
+    "enemy_player_list": {
+      "x": 1750,
+      "first_y": 62,
+      "row_height": 42,
+      "note": "The opposing team is listed down the right edge, in the same results-block order. UNVERIFIED: whether an enemy can be spectated at all in a client replay, and whether the map then shows their side."
+    }
   },
   "timings": {
     "after_click_s": 0.45,
@@ -89,6 +95,6 @@
     "replay_load_timeout_s": 120,
     "battle_end_grace_s": 25,
     "return_to_hangar_s": 20,
-    "player_list_settle_s": 8.0
+    "player_list_settle_battle_s": 150.0
   }
 }

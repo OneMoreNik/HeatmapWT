@@ -153,43 +153,74 @@ battles.
 
 ## Does it matter whose eyes we watch through?
 
-**For the heatmap, no — reasoned, not yet tested.** A client replay contains
-only the packet stream the recording player's client received. Teammate
-positions are in there continuously, which is how their minimap worked; enemy
-positions never were. Switching the camera cannot reveal units the client never
-received, so the recorded set should be the same whichever teammate is watched.
+**No. Tested, not assumed.** The same Berlin Conquest 2 replay was recorded
+three times, watching three different players:
 
-**For following one player, yes.** The spectated vehicle is the one drawn amber,
-and it is the only vehicle the API identifies. Every other track is anonymous.
-So the best player's route is already in the recordings — just unlabelled.
+| Watched | Tracks | Sides recorded |
+|---|---|---|
+| ProfileLoky (the author) | 49 | all own team |
+| Seva172 (same team) | 46 | all own team |
+| the top enemy scorer | — | all own team, still no red |
 
-**Untested:** whether an enemy can be spectated at all, and what the map shows
-if so. Probably very little, since the data is not in the file.
+A client replay holds only the packet stream the recording player's client
+received: team mates continuously, enemies never. Switching the camera cannot
+reveal units that were never in the file. Selecting an enemy *works* — the row
+highlights — but the client says "местонахождение временно неизвестно", its
+location is temporarily unknown, and the map keeps showing the author's team.
+
+So for heatmaps, watch whoever is convenient. The author is the default
+because it needs no clicking at all.
+
+**For following one player it does matter**, because the spectated vehicle is
+the only one the API identifies, drawn amber. Every other track is anonymous.
+The best player's route is therefore already in any recording of that battle —
+just unlabelled until you spectate them.
 
 ## Following a chosen player
 
-`--follow` takes `author` (the default, no clicking needed), `best` for the
-highest scorer on the author's team, or part of a name:
+`--follow` takes:
+
+- `author` — the default; the replay opens on them, so nothing is clicked
+- `best` — highest scorer on the author's team
+- `overall` — highest scorer in the battle, even if that is an enemy
+- any substring of a player name
 
 ```bash
-python collector/auto_replay.py --rows 7 --follow best
-python collector/auto_replay.py --rows 7 --follow Ph4nt0m
+python collector/auto_replay.py --replay 19.21.50 --follow best
+python collector/auto_replay.py --replay 19.21.50 --follow Ph4nt0m
 ```
 
-The row is computed offline. The client's in-replay player list is that team's
-players **in the order the results block stores them**, which `wtresults`
-reports as `slot`. Verified against a Tunisia battle: all 16 names in the same
-order.
+**Prefer `--replay` over `--rows`.** Row numbers shift every time a battle is
+played, so naming the file is the safer way to pick one.
 
-Two caveats:
+How the row is found, with no reading of the screen: the client's in-replay
+player list is that team's players **in the order the results block stores
+them**, which `wtresults` reports as `slot`. Own team runs down the left edge,
+the opposing team down the right.
 
-- The order only settles once every player has joined. Early in a replay it
-  differs, so the click waits `player_list_settle_s` (8 s) first.
-- **`player_list` geometry in `ui_layout.json` is unverified.** `first_y` and
-  `row_height` were read off a compressed screenshot and have never been
-  clicked. Run once with `--shots` and check before trusting `--follow`.
-- `best` deliberately means best on the **author's team**. The highest scorer
-  overall may be an enemy, who probably cannot be followed at all.
+The one trap: players who have not joined yet are **absent from the list**, so
+everyone below them shifts up. A first attempt clicked AlucarDracula instead of
+Seva172 for exactly this reason. The speed is therefore set first and the click
+waits `player_list_settle_battle_s` (150 battle seconds, which is about 9 s of
+wall clock at 16x) for the roster to fill. Verified by screenshot afterwards:
+the target highlights amber with its name in a tooltip.
+
+## Recording a live battle
+
+The recorder does not care whether a map comes from a replay or a live battle,
+so your own battles can be captured as they happen:
+
+```bash
+python collector/sample_map.py --hz 20 --label my-battle
+```
+
+It waits for a map, records, and splits per battle. Afterwards, attach a
+source.json with `tools/backfill_source.py` and run `process_recording.py`.
+
+**Never run `auto_replay.py` while a battle is live.** It automates the replay
+browser in the menus, which is not gameplay; pointing it at a live battle would
+be. It checks `map_info` and refuses to start if one is running, and every
+click re-checks that the game is the foreground window.
 
 ## The blocker: positions in server replays
 
@@ -226,12 +257,10 @@ BLKs, which are now readable.
 1. **Volume.** Everything rests on one battle per map. Several battles on the
    same map and layout will show whether the binning and smoothing hold up.
    `heatmap/generate.py` already takes several `tracks.csv` files at once.
-2. **Verify `--follow`** against a real run with `--shots`, and settle whether
-   an enemy can be spectated.
-3. **Decode the type-4 position encoding**, checked against the answer key.
+2. **Decode the type-4 position encoding**, checked against the answer key.
    That unblocks batch processing, both teams, and vehicle class from the
    replay rather than from map icons.
-4. **Storage.** A battle is a few MB of CSV. Past a few dozen, move to Parquet
+3. **Storage.** A battle is a few MB of CSV. Past a few dozen, move to Parquet
    or DuckDB as the brief suggests.
-5. **The overlay** (Ctrl+Q large map, Ctrl+E minimap) — last, and only once the
+4. **The overlay** (Ctrl+Q large map, Ctrl+E minimap) — last, and only once the
    heatmaps are worth overlaying.

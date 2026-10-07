@@ -298,7 +298,10 @@ def resolve_target(replay: Path, wtresults: Path, follow: str):
         return None
 
     players = battle.get("players", [])
-    if follow == "author":
+    overall_best = players[0] if players else None
+    if follow == "overall":
+        target = overall_best
+    elif follow == "author":
         wanted = [p for p in players if p["name"] in battle.get("author", "")]
         target = wanted[0] if wanted else None
     elif follow == "best":
@@ -320,7 +323,10 @@ def resolve_target(replay: Path, wtresults: Path, follow: str):
         return None
     return {"name": target["name"], "score": target["score"],
             "team": target["team"], "row": row,
-            "is_author": target["name"] in battle.get("author", "")}
+            "is_author": target["name"] in battle.get("author", ""),
+            # The opposing team is listed down the right edge, not the left.
+            "is_enemy": target["team"] != battle.get("authorTeam"),
+            "overall_best": overall_best["name"] if overall_best else None}
 
 
 def write_source(out_dir: Path, label: str, replay: Path, speed: int,
@@ -401,17 +407,6 @@ def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
     try:
         if not wait_for(api, True, timings["replay_load_timeout_s"], "the replay to load"):
             return False
-        if target is not None and not target["is_author"]:
-            # The list settles into results-block order only once every player
-            # has joined, so give the battle a moment before counting rows.
-            time.sleep(timings["player_list_settle_s"])
-            plist = view["player_list"]
-            print(f"    following {target['name']} ({target['score']} points), "
-                  f"row {target['row']}")
-            screen.click({"x": plist["x"],
-                          "y": plist["first_y"] + target["row"] * plist["row_height"],
-                          "note": f"player row {target['row']}: {target['name']}"})
-
         if speed_clicks:
             print("    replay running; setting playback speed")
             before = screen.region_png(view["speed_label"])
@@ -423,6 +418,25 @@ def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
                       "missed; continuing at 1x. Re-measure replay_view.speed_up.")
         else:
             print("    replay running at 1x")
+
+        if target is not None and not target["is_author"]:
+            # The in-replay list is that team's players in results-block order,
+            # but players who have not joined yet are simply absent, which
+            # shifts everyone above them up. Waiting past the join phase is
+            # what makes the row index correct; measured in battle seconds, so
+            # a fast playback waits proportionally less wall clock.
+            battle_wait = timings["player_list_settle_battle_s"]
+            wall_wait = min(60.0, max(4.0, battle_wait / max(speed, 1)))
+            print(f"    waiting {wall_wait:.0f}s for the roster to fill "
+                  f"({battle_wait:.0f}s of battle time)")
+            time.sleep(wall_wait)
+            plist = view["enemy_player_list"] if target.get("is_enemy") else view["player_list"]
+            side = "enemy" if target.get("is_enemy") else "own"
+            print(f"    following {target['name']} ({target['score']} points), "
+                  f"{side}-side row {target['row']}")
+            screen.click({"x": plist["x"],
+                          "y": plist["first_y"] + target["row"] * plist["row_height"],
+                          "note": f"player row {target['row']}: {target['name']}"})
 
         start = time.monotonic()
         while map_is_live(api.get("map_info.json")):
@@ -452,7 +466,11 @@ def main() -> int:
     parser.add_argument("--layout", type=Path, default=here / "ui_layout.json")
     parser.add_argument("--wtresults", type=Path, default=Path("bin/wtresults.exe"))
     parser.add_argument("--out", type=Path, default=Path("data/live"))
-    parser.add_argument("--rows", default="0", help="comma-separated row numbers, newest first")
+    parser.add_argument("--rows", default="", help="comma-separated row numbers, newest first")
+    parser.add_argument("--replay", action="append", default=[],
+                        help="select by filename instead of row number, matched as a "
+                             "substring. Row numbers shift every time a battle is "
+                             "played, so this is the safer way to name one")
     parser.add_argument("--speed", type=int, default=1,
                         help="playback speed, reached by doubling from 1x. The default "
                              "of 1 skips the speed button entirely: nobody is waiting on "
@@ -464,7 +482,8 @@ def main() -> int:
     parser.add_argument("--follow", default="author",
                         help="who to spectate: author (the default, which needs no "
                              "clicking), best for the highest scorer on the author's "
-                             "team, or part of a player name")
+                             "team, overall for the highest scorer in the battle even if "
+                             "that is an enemy, or part of a player name")
     parser.add_argument("--shots", type=Path,
                         help="save a screenshot after every click into this directory")
     args = parser.parse_args()
@@ -494,6 +513,20 @@ def main() -> int:
     speed_clicks = max(0, round((args.speed).bit_length() - 1))
     screen = Screen(layout, args.dry_run, args.shots)
     rows = [int(r) for r in args.rows.split(",") if r.strip()]
+    for wanted in args.replay:
+        matched = [i for i, r in enumerate(replays) if wanted.lower() in r.name.lower()]
+        if not matched:
+            print(f"no replay matches {wanted!r}")
+        elif len(matched) > 1:
+            print(f"{wanted!r} matches {len(matched)} replays; be more specific:")
+            for i in matched:
+                print(f"  row {i}: {replays[i].name}")
+        else:
+            rows.append(matched[0])
+    if not rows:
+        raise SystemExit("nothing selected; use --rows or --replay, or --list to look")
+    # Keep the client's own order so the list is walked top to bottom.
+    rows = sorted(set(rows))
 
     print(f"{len(rows)} replay(s) to play at {args.speed}x "
           f"({speed_clicks} speed-up clicks), recording at {args.hz:g} Hz")
