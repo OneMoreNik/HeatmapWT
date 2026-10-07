@@ -32,7 +32,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-HOST = "localhost"
+# Not "localhost": that resolves to ::1 first on Windows, the game only listens
+# on IPv4, and every request then pays the full connect timeout before falling
+# back. That alone capped sampling at 0.5 Hz.
+HOST = "127.0.0.1"
 PORT = 8111
 
 # How often to re-read map_info while recording, in seconds.
@@ -52,7 +55,7 @@ class Api:
     is too slow to follow a moving tank; reusing one connection removes that.
     """
 
-    def __init__(self, timeout: float = 2.0):
+    def __init__(self, timeout: float = 1.0):
         self.timeout = timeout
         self.conn: http.client.HTTPConnection | None = None
 
@@ -242,7 +245,8 @@ def record(out_dir: Path, label: str, hz: float) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--hz", type=float, default=4.0, help="samples per second")
+    parser.add_argument("--hz", type=float, default=10.0,
+                        help="samples per second of wall clock; raise it when playing a replay back at speed")
     parser.add_argument("--out", type=Path, default=Path("data/live"))
     parser.add_argument("--label", default="", help="name to tag recordings with")
     args = parser.parse_args()
