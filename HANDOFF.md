@@ -202,6 +202,34 @@ Each of these cost real time; none are obvious.
   stretches the image by 20% and skews every track with it. `client_grid_size()`
   in `tools/process_recording.py` checks the tile first, then falls back to
   rejecting the whole-map shape when nothing is published to compare against.
+- **Take the battle area's centre from the client, not from the mission's
+  names.** A mission offers several battle areas and nothing in the naming says
+  which one is live. Berlin's client grid matches `dom_battle_area_hardcore` to
+  0.1 m; Volokolamsk's matches the plain `briefing_battlearea`, and its
+  `_hardcore` one describes a square **1152 m away**, which on a 1400 m map is a
+  different part of the world. Every recording's `grid_zero` and `grid_size`
+  give the answer exactly, so `process_recording.py` passes `--centre` to the
+  renderers and `pick_areas(..., near=)` chooses the capture and spawn variants
+  nearest that point. Checked on all seven battles: every centre lands on the
+  mission's own battle area to the centimetre, and track starts sit a median
+  0-91 m from a real spawn.
+- **A battle area need not be square.** Hurtgen's `grid_size` is
+  `[1550.0, 1800.0]`. Everything downstream draws a square, so the longer side
+  is used -- which is also what wt-tools publishes for it -- and the centre is
+  taken from each axis separately. Reading only `grid_size[0]`, as the code did,
+  cut 250 m off the north-south extent and left 18% of that battle's tracks
+  outside the picture.
+- **"Prefer real areas over `briefing_` ones" is not safe on its own.**
+  Hurtgen's only non-briefing spawn areas are `teamB_artillery_spawn_*`, 3.3 km
+  outside the battle area, so that preference picked artillery positions over
+  the tank spawns and put every track start a median 3863 m from a "spawn". When
+  the battle's centre is known, proximity decides the briefing split as well as
+  the difficulty one.
+- **A mission may define no battle area at all.** Middle East has one capture
+  zone and two respawns, named `resp01` rather than anything containing "spawn".
+  Their midpoint is a rough guess -- good enough to draw a grid around, not to
+  align a published image against -- so when there is no battle area the image
+  is dropped and the client's own square is drawn verbatim instead.
 - **`Airdefence` is not a player SPAA.** It is the static base AA. On Fortress
   the client reported ten of them in a single 0.8 s burst, at fixed positions
   250-420 m outside the battle area, while the six real player SPAA came through
@@ -288,7 +316,7 @@ python collector/auto_replay.py --replay <name> --follow best --speed 16 --shots
 python tools/process_recording.py data/live/<capture>
 ```
 
-What has been checked end to end, on eight battles across seven maps:
+What has been checked end to end, on eleven battles across ten maps:
 
 - Clicks land: the replay list, the watch button, the speed control and the
   player row were each confirmed by screenshot.
@@ -315,6 +343,11 @@ What has been checked end to end, on eight battles across seven maps:
 - Out-of-square samples are dropped, not clamped to the edge: `Grid.add` returns
   False, so Fortress's 170 off-map staging samples vanish rather than piling up
   along the south boundary.
+- Every battle's square now holds 100% of its own samples, across all seven live
+  captures and four maps whose geometry had to be chosen rather than read.
+- A map with no published image and no battle area still works: Middle East
+  draws on the client's grid alone, with 100% of samples inside and track starts
+  a median 32 m from a respawn.
 
 ## Recording a live battle
 

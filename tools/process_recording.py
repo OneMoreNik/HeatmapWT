@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "collector"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from heatmapwt.layout import BATTLE_AREA, pick_areas  # noqa: E402
 from build_tracks import folder_start  # noqa: E402
 from fetch_maps import resolve_map_key  # noqa: E402
 
@@ -176,8 +177,9 @@ def battle_group(recording: Path) -> list[Path]:
     return group
 
 
-def client_grid_size(info: dict, map_meta: dict | None) -> float | None:
-    """The playable square the client reported, or None to use the published one.
+def client_square(info: dict, map_meta: dict | None
+                  ) -> tuple[float, tuple[float, float]] | None:
+    """The square the client drew, as (size, centre), or None to use the mission.
 
     The client's grid is usually the battle area exactly, and is sometimes more
     accurate than the size published with the image. `grid_steps`, the spacing
@@ -197,13 +199,18 @@ def client_grid_size(info: dict, map_meta: dict | None) -> float | None:
     `grid_zero` on the map's own corner, while its image covers 1700 m; taking
     that literally stretches the image by 20%.
 
-    So the client wins only when it is talking about the same grid. Without a
-    published size to compare against, the whole-map shape is the only tell.
+    A battle area need not be square. Hurtgen's is 1550 x 1800, centred where
+    the mission puts `briefing_battlearea` to the centimetre. Everything
+    downstream draws a square, so the longer side is used -- which is also the
+    size wt-tools publishes for it -- and the centre comes from each axis
+    separately. Reading only `grid_size[0]` there cut 250 m off the north-south
+    extent and left 18% of the tracks outside the picture.
     """
     grid = info.get("grid_size") or []
-    if not grid or not grid[0]:
+    zero = info.get("grid_zero") or []
+    if len(grid) < 2 or not grid[0] or not grid[1] or len(zero) < 2:
         return None
-    size = float(grid[0])
+    width, height = float(grid[0]), float(grid[1])
     steps = (info.get("grid_steps") or [None])[0]
 
     tile = (map_meta or {}).get("tile_m")
@@ -211,12 +218,13 @@ def client_grid_size(info: dict, map_meta: dict | None) -> float | None:
         return None
 
     mn, mx = info.get("map_min") or [], info.get("map_max") or []
-    zero = info.get("grid_zero") or []
-    if len(mn) >= 2 and len(mx) >= 2 and len(zero) >= 2:
-        if (abs((mx[0] - mn[0]) - size) < 1.0 and abs(zero[0] - mn[0]) < 1.0
-                and abs(zero[1] - mx[1]) < 1.0):
+    if len(mn) >= 2 and len(mx) >= 2:
+        if (abs((mx[0] - mn[0]) - width) < 1.0 and abs((mx[1] - mn[1]) - height) < 1.0
+                and abs(zero[0] - mn[0]) < 1.0 and abs(zero[1] - mx[1]) < 1.0):
             return None
-    return size
+
+    centre = (zero[0] + width / 2, zero[1] - height / 2)
+    return max(width, height), centre
 
 
 def process(recording: Path, args) -> bool:
@@ -245,7 +253,41 @@ def process(recording: Path, args) -> bool:
     meta_path = (map_dir / "map.json") if map_dir else None
     map_meta = (json.loads(meta_path.read_text(encoding="utf-8"))
                 if meta_path and meta_path.exists() else None)
-    size_m = client_grid_size(info, map_meta)
+    zero = info.get("grid_zero") or []
+    grid = info.get("grid_size") or []
+
+    def raw_square() -> tuple[float, tuple[float, float]] | None:
+        """The client's square taken at face value, whatever shape it is."""
+        if len(grid) < 2 or not grid[0] or not grid[1] or len(zero) < 2:
+            return None
+        return (max(float(grid[0]), float(grid[1])),
+                (zero[0] + float(grid[0]) / 2, zero[1] - float(grid[1]) / 2))
+
+    square = client_square(info, map_meta)
+    # The client reports exactly which square it drew. Take its centre as well
+    # as its size: a mission offers several battle areas and choosing between
+    # them by difficulty name is a guess that is wrong often enough to matter --
+    # on Volokolamsk the `_hardcore` one sits 1152 m from where the battle was.
+    size_m, centre = square if square else (None, None)
+
+    if square is None:
+        # The grid was rejected, so it and the image no longer agree. An image
+        # can still be placed if the mission says where the battle area is --
+        # that is the Finland case, 1700 m published against a 2048 m whole-map
+        # grid. Without a battle area there is nothing to place it against:
+        # Middle East defines only a capture zone and two respawns, and their
+        # midpoint is a rough guess, fine for drawing a grid and not for
+        # aligning a picture. Then draw the client's square verbatim instead,
+        # which is exact even when it is the whole map.
+        layout_json = json.loads(Path(layout).read_text(encoding="utf-8"))
+        if not pick_areas(layout_json, BATTLE_AREA):
+            if map_dir is not None:
+                print("  the mission defines no battle area, so the published image "
+                      "cannot be placed; drawing the client's grid instead")
+                map_dir = None
+            fallback = raw_square()
+            if fallback:
+                size_m, centre = fallback
 
     if map_dir is None:
         # wt-tools publishes 62 maps, not all of them. The client reports the
@@ -254,8 +296,9 @@ def process(recording: Path, args) -> bool:
         if size_m is None:
             # With no image there is no published size to protect, so even the
             # whole-map grid is better than nothing: a wider view, still exact.
-            grid = info.get("grid_size") or []
-            size_m = float(grid[0]) if grid and grid[0] else None
+            fallback = raw_square()
+            if fallback:
+                size_m, centre = fallback
         if size_m:
             print(f"  no map image published; using the client's "
                   f"{size_m:.0f} m grid instead")
@@ -283,6 +326,8 @@ def process(recording: Path, args) -> bool:
         plot += ["--map", map_dir]
     if size_m:
         plot += ["--size", size_m]
+    if centre:
+        plot += ["--centre", f"{centre[0]},{centre[1]}"]
     run(plot, what="track plot")
 
     tracks = recording / "tracks.csv"
@@ -294,6 +339,8 @@ def process(recording: Path, args) -> bool:
             cmd += ["--map", map_dir]
         if size_m:
             cmd += ["--size", size_m]
+        if centre:
+            cmd += ["--centre", f"{centre[0]},{centre[1]}"]
         if vclass != "all":
             cmd += ["--class", vclass]
         made += run(cmd, what=f"heatmap {vclass}").returncode == 0
@@ -305,6 +352,8 @@ def process(recording: Path, args) -> bool:
             cmd += ["--map", map_dir]
         if size_m:
             cmd += ["--size", size_m]
+        if centre:
+            cmd += ["--centre", f"{centre[0]},{centre[1]}"]
         made += run(cmd, what=f"heatmap {weighting}").returncode == 0
     if made == 0:
         print("  no heatmaps produced")

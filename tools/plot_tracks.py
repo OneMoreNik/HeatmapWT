@@ -49,7 +49,8 @@ STYLE = {
 }
 
 
-def map_background(map_dir: Path, layout: dict, size_override: float | None = None):
+def map_background(map_dir: Path, layout: dict, size_override: float | None = None,
+                   near: tuple[float, float] | None = None):
     """Image bytes and world bounds for the map picture, or None.
 
     wt-tools publishes the image and the size of the area it covers but not
@@ -62,7 +63,7 @@ def map_background(map_dir: Path, layout: dict, size_override: float | None = No
     # The client's grid is authoritative; wt-tools' published size is not
     # always right, so the image is stretched to the real square.
     size = size_override or meta.get("size_m")
-    centre = battle_area_centre(layout)
+    centre = near or battle_area_centre(layout)
     if not size or centre is None:
         return None
     image_path = map_dir / meta["image"]
@@ -142,8 +143,9 @@ def grid_lines(view: View, out: list[str]) -> None:
         z += GRID_STEP_M
 
 
-def draw_layout(view: View, layout: dict, out: list[str]) -> None:
-    for cap in capture_points(layout):
+def draw_layout(view: View, layout: dict, out: list[str],
+                near: tuple[float, float] | None = None) -> None:
+    for cap in capture_points(layout, near):
         name = cap["name"]
         cx, cz = view.px(cap["x"]), view.py(cap["z"])
         out.append(f'<circle cx="{cx:.1f}" cy="{cz:.1f}" r="22" fill="none" '
@@ -152,7 +154,7 @@ def draw_layout(view: View, layout: dict, out: list[str]) -> None:
         out.append(f'<text x="{cx:.1f}" y="{cz + 5:.1f}" fill="{STYLE["cap"]}" font-size="14" '
                    f'font-weight="600" text-anchor="middle">{esc(label)}</text>')
 
-    for cap in spawns(layout):
+    for cap in spawns(layout, near):
         name = cap["name"]
         colour = STYLE["spawn_t1"] if "t1_" in name else STYLE["spawn_t2"]
         cx, cz = view.px(cap["x"]), view.py(cap["z"])
@@ -222,13 +224,14 @@ def legend(view: View, tracks: dict, meta: dict, out: list[str]) -> None:
                f'circle = route start, square = last seen</text>')
 
 
-def render(tracks: dict, layout: dict, meta: dict, background=None) -> str:
+def render(tracks: dict, layout: dict, meta: dict, background=None,
+           near: tuple[float, float] | None = None) -> str:
     xs, zs = [], []
     for track in tracks.values():
         for _, x, z in track["points"]:
             xs.append(x)
             zs.append(z)
-    for cap in capture_points(layout) + spawns(layout):
+    for cap in capture_points(layout, near) + spawns(layout, near):
         xs.append(cap["x"])
         zs.append(cap["z"])
     if background is not None:
@@ -256,7 +259,7 @@ def render(tracks: dict, layout: dict, meta: dict, background=None) -> str:
         out.append(f'<image href="{href}" x="{x0:.1f}" y="{y0:.1f}" '
                    f'width="{width:.1f}" height="{height:.1f}" opacity="0.85"/>')
     grid_lines(view, out)
-    draw_layout(view, layout, out)
+    draw_layout(view, layout, out, near)
     draw_tracks(view, tracks, out)
     legend(view, tracks, meta, out)
     out.append("</svg>")
@@ -273,6 +276,9 @@ def main() -> int:
                         help="side of the playable square in metres, overriding the "
                              "size published with the image")
     parser.add_argument("--out", type=Path, help="where to write the SVG")
+    parser.add_argument("--centre", metavar="X,Z",
+                        help="centre of the square to draw, in world metres, as the "
+                             "client reported it")
     args = parser.parse_args()
 
     tracks = read_tracks(args.recording / "tracks.csv")
@@ -286,12 +292,13 @@ def main() -> int:
         "subtitle": f"{len(tracks)} tracks, {samples} samples over {span:.0f}s  ·  "
                     f"recorded from the client map during replay playback",
     }
-    background = map_background(args.map_dir, layout, args.size) if args.map_dir else None
+    near = tuple(float(v) for v in args.centre.split(",")) if args.centre else None
+    background = map_background(args.map_dir, layout, args.size, near) if args.map_dir else None
     if args.map_dir and background is None:
         print(f"no usable map image in {args.map_dir}; drawing without one")
 
     out_path = args.out or (args.recording / "tracks.svg")
-    out_path.write_text(render(tracks, layout, meta, background), encoding="utf-8")
+    out_path.write_text(render(tracks, layout, meta, background, near), encoding="utf-8")
     print(f"{len(tracks)} tracks, {samples} samples -> {out_path}")
     return 0
 

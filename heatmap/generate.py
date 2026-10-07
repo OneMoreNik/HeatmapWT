@@ -221,13 +221,18 @@ def main() -> int:
                         help="percentile mapped to the top of the colour ramp")
     parser.add_argument("--px", type=int, default=1024, help="output image size")
     parser.add_argument("--out", type=Path, help="output PNG path")
+    parser.add_argument("--centre", metavar="X,Z",
+                        help="centre of the square to draw, in world metres. The "
+                             "client reports this in every recording and it is exact; "
+                             "without it the mission's battle area is guessed at")
     args = parser.parse_args()
 
     map_meta = {}
     if args.map_dir and (args.map_dir / "map.json").exists():
         map_meta = json.loads((args.map_dir / "map.json").read_text())
     layout = json.loads(args.layout.read_text())
-    centre = battle_area_centre(layout)
+    given = tuple(float(v) for v in args.centre.split(",")) if args.centre else None
+    centre = given or battle_area_centre(layout)
     size_m = args.size or map_meta.get("size_m")
     if centre is None or not size_m:
         raise SystemExit("need an area centre (from --layout) and a size "
