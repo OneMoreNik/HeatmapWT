@@ -15,3 +15,6 @@ __pycache__/
 
 # Downloaded third-party map images
 data/maps/
+
+# Generated heatmaps and viewers
+data/heatmaps/

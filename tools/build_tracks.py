@@ -29,6 +29,12 @@ GROUND_ICONS = {
     "Airdefence", "Assault", "Player",
 }
 
+# The API types aircraft separately from ground vehicles, so a player who
+# spawns a plane simply stops producing ground_model rows. Filtering on the
+# type keeps those flight paths out of a ground heatmap without having to
+# guess from the coordinates.
+GROUND_TYPES = {"ground_model"}
+
 # A fast light tank tops out near 80 km/h; allow headroom for a sparse sample
 # rate without letting a match jump across the map.
 MAX_SPEED_MS = 30.0
@@ -113,7 +119,7 @@ def read_frames(csv_path: Path, mapping: WorldMapping):
     times: dict[int, float] = {}
     with open(csv_path, encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
-            if row["type"] not in ("ground_model", "aircraft"):
+            if row["type"] not in GROUND_TYPES:
                 continue
             if row["icon"] not in GROUND_ICONS:
                 continue
