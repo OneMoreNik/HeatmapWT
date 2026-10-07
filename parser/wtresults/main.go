@@ -38,6 +38,10 @@ type player struct {
 	CaptureZone int    `json:"captureZone"`
 	// Rank is the player's place on the scoreboard, 1 being the highest score.
 	Rank int `json:"rank"`
+	// Slot is the position in the results block's own player array, before any
+	// sorting. If the client's in-replay player list uses the same order, this
+	// is what a row index can be computed from.
+	Slot int `json:"slot"`
 }
 
 type battle struct {
@@ -129,6 +133,7 @@ func readBattle(path string) (*battle, error) {
 			continue
 		}
 		out.Players = append(out.Players, player{
+			Slot:        len(out.Players),
 			Name:        name,
 			ClanTag:     str(field(entry, "clanTag")),
 			UserID:      str(field(entry, "userId")),

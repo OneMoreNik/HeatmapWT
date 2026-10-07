@@ -8,42 +8,39 @@ Project brief (rendered): [docs/brief.html](docs/brief.html)
 
 ## Status
 
-Proof of concept in progress (Oct 2026). Both Berlin server replays are archived
-locally and parse: 32 players with teams, the vehicle roster, kill timestamps,
-and the map's real world bounds and capture points read from the installed game.
+Working end to end for a single battle (Oct 2026). Replays are played back in
+the client automatically and the positions the client draws on its own map are
+recorded, then turned into per-class heatmaps. Three battles have gone through
+the whole pipeline without anyone touching the game.
 
-One thing blocks the first plot: vehicle **positions**. The movement packets are
-located (type 4, 8 Hz, 40 tracks) but their coordinates are bit-packed, and
-wrpl-inspector's `ecshashes.json` is older than game version 101404, so it
-decodes no components at all. Regenerating it is the next step and looks
-tractable — component ids are FNV-1a 32-bit hashes of the component name, which
-reproduces all 6647 known pairs exactly.
+Start here: **[HANDOFF.md](HANDOFF.md)** — pipeline, setup on a new machine,
+the calibration chain and how each link was verified, and the traps.
 
-Format details and what is verified: [docs/replay-format.md](docs/replay-format.md).
+```bash
+python collector/sync_replays.py                    # repo replays -> game folder
+python collector/auto_replay.py --list              # read from the files, no game
+python collector/auto_replay.py --rows 0,1,2        # play and record
+python tools/process_recording.py data/live/*/      # tracks, plots, heatmaps, viewer
+```
+
+Two things are not solved. **Enemy vehicles never appear** — the client's map
+API reports only your own team, so a battle yields one side. And positions in
+**server replays**, which contain both teams and need no game running, are
+still undecoded; that is what would let this scale past one battle at a time.
+See [docs/replay-format.md](docs/replay-format.md).
 
 ## Layout
 
 ```text
-heatmapwt/      Python: replay header, zstd packet stream, vehicle roster
-collector/      download server replays by session id
-parser/wtcarve  Go: server replay -> players.json, tracks.csv, kills.csv
-parser/wtprobe  Go: locate the movement packets in a new game version
-parser/wtlevel  Go: map bounds and capture points from the installed game
-vendor/patches/ changes needed to make wrpl-inspector read current replays
-```
-
-Build the Go tools (needs Go and a clone of wrpl-inspector in `vendor/`):
-
-```bash
-cd parser/wtcarve && go build -o ../../bin/wtcarve.exe .
-```
-
-Then:
-
-```bash
-python tools/inspect_replay.py replays/*.wrpl
-python collector/download_server_replay.py replays/*.wrpl
-./bin/wtcarve.exe replays/server/<session hex>
+heatmapwt/      replay header, zstd packet stream, vehicle roster
+collector/      sync replays, drive the client, record, fetch map images
+parser/wtcarve  server replay -> players, kills (no positions yet)
+parser/wtresults any replay -> scoreboard, teams, who to follow
+parser/wtlevel  map bounds, capture points and spawns from the installed game
+parser/wtprobe  locate the movement packets in a new game version
+tools/          stitch tracks, plot, process a recording, build the viewer
+heatmap/        dwell-weighted binning, smoothing, per-class output
+vendor/patches/ changes wrpl-inspector needs to read current replays
 ```
 
 ## Findings

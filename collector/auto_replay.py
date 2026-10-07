@@ -277,6 +277,81 @@ def describe(replay: Path, wtresults: Path) -> str:
         return replay.name
 
 
+def resolve_target(replay: Path, wtresults: Path, follow: str):
+    """Who to spectate, and which row of the in-replay player list they are.
+
+    The client's in-replay player list is its team's players in the order the
+    results block stores them, so a row index can be computed offline. That
+    order only settles once everyone has joined, which is why the click waits.
+
+    `follow` is "best" (highest scorer on the author's team), "author", or a
+    name to match case-insensitively.
+    """
+    if not wtresults.exists():
+        return None
+    result = subprocess.run([str(wtresults), "-json", str(replay)],
+                            capture_output=True, text=True, timeout=60,
+                            encoding="utf-8", errors="replace")
+    try:
+        battle = json.loads(result.stdout)[0]
+    except (json.JSONDecodeError, IndexError):
+        return None
+
+    players = battle.get("players", [])
+    if follow == "author":
+        wanted = [p for p in players if p["name"] in battle.get("author", "")]
+        target = wanted[0] if wanted else None
+    elif follow == "best":
+        team = battle.get("authorTeam")
+        same = [p for p in players if p["team"] == team]
+        target = same[0] if same else (players[0] if players else None)
+    else:
+        wanted = [p for p in players if follow.lower() in p["name"].lower()]
+        target = wanted[0] if wanted else None
+    if target is None:
+        return None
+
+    # Row index is the player's place among their own team, in slot order.
+    side = sorted((p for p in players if p["team"] == target["team"]),
+                  key=lambda p: p["slot"])
+    try:
+        row = side.index(target)
+    except ValueError:
+        return None
+    return {"name": target["name"], "score": target["score"],
+            "team": target["team"], "row": row,
+            "is_author": target["name"] in battle.get("author", "")}
+
+
+def write_source(out_dir: Path, label: str, replay: Path, speed: int,
+                 wtresults: Path, prefix: str) -> None:
+    """Record which replay a capture came from, for tools/process_recording.py.
+
+    Without this the analysis cannot tell which map a folder of map positions
+    belongs to, and the map image and layout have to be named by hand.
+    """
+    source = {"replay": str(replay), "label": label, "speed": speed, "prefix": prefix}
+    if wtresults.exists():
+        result = subprocess.run([str(wtresults), "-json", str(replay)],
+                                capture_output=True, text=True, timeout=60,
+                                encoding="utf-8", errors="replace")
+        try:
+            battle = json.loads(result.stdout)[0]
+            source.update({
+                "level": battle["level"], "mission": battle["mission"],
+                "battleType": battle["battleType"], "sessionId": battle["sessionId"],
+                "author": battle["author"], "authorTeam": battle["authorTeam"],
+            })
+        except (json.JSONDecodeError, IndexError, KeyError):
+            pass
+    # The recorder names its own folder, so write into whichever folders it
+    # created for this replay since the run began.
+    for folder in sorted(out_dir.glob(f"*{label}*")):
+        if folder.is_dir():
+            (folder / "source.json").write_text(json.dumps(source, indent=2),
+                                                encoding="utf-8")
+
+
 def wait_for(api: Api, want_live: bool, timeout: float, what: str) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -289,7 +364,9 @@ def wait_for(api: Api, want_live: bool, timeout: float, what: str) -> bool:
 
 def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
              label: str, record_hz: float, out_dir: Path,
-             open_menu: bool = True) -> bool:
+             open_menu: bool = True, replay: Path | None = None,
+             speed: int = 1, wtresults: Path | None = None,
+             target: dict | None = None) -> bool:
     layout = screen.layout
     timings = layout["timings"]
     hangar, dialog, view = layout["hangar"], layout["replay_dialog"], layout["replay_view"]
@@ -324,6 +401,17 @@ def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
     try:
         if not wait_for(api, True, timings["replay_load_timeout_s"], "the replay to load"):
             return False
+        if target is not None and not target["is_author"]:
+            # The list settles into results-block order only once every player
+            # has joined, so give the battle a moment before counting rows.
+            time.sleep(timings["player_list_settle_s"])
+            plist = view["player_list"]
+            print(f"    following {target['name']} ({target['score']} points), "
+                  f"row {target['row']}")
+            screen.click({"x": plist["x"],
+                          "y": plist["first_y"] + target["row"] * plist["row_height"],
+                          "note": f"player row {target['row']}: {target['name']}"})
+
         if speed_clicks:
             print("    replay running; setting playback speed")
             before = screen.region_png(view["speed_label"])
@@ -352,6 +440,8 @@ def play_one(screen: Screen, api: Api, row: int, speed_clicks: int,
             recorder.wait(timeout=20)
         except subprocess.TimeoutExpired:
             recorder.kill()
+        if replay is not None and wtresults is not None:
+            write_source(out_dir, label, replay, speed, wtresults, label)
     return True
 
 
@@ -371,6 +461,10 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="list replays with their row numbers")
     parser.add_argument("--dry-run", action="store_true",
                         help="print every click without sending any input")
+    parser.add_argument("--follow", default="author",
+                        help="who to spectate: author (the default, which needs no "
+                             "clicking), best for the highest scorer on the author's "
+                             "team, or part of a player name")
     parser.add_argument("--shots", type=Path,
                         help="save a screenshot after every click into this directory")
     args = parser.parse_args()
@@ -414,9 +508,13 @@ def main() -> int:
                 continue
             replay = replays[row]
             print(f"row {row}: {describe(replay, args.wtresults)}")
+            target = resolve_target(replay, args.wtresults, args.follow)
+            if args.follow != "author" and target is None:
+                print(f"    no player matches {args.follow!r}; watching the author instead")
             label = replay.stem.strip("#").replace(" ", "-").replace(".", "")
             if play_one(screen, api, row, speed_clicks, label, args.hz, args.out,
-                        open_menu=need_menu):
+                        open_menu=need_menu, replay=replay, speed=args.speed,
+                        wtresults=args.wtresults, target=target):
                 done += 1
                 need_menu = False
             else:
