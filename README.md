@@ -38,7 +38,7 @@ parser/wtcarve  server replay -> players, kills (no positions yet)
 parser/wtresults any replay -> scoreboard, teams, who to follow
 parser/wtlevel  map bounds, capture points and spawns from the installed game
 parser/wtprobe  locate the movement packets in a new game version
-tools/          stitch tracks, plot, process a recording, build the viewer
+tools/          stitch tracks, plot, process a recording, import a map, build the viewer
 heatmap/        dwell-weighted binning, smoothing, per-class output
 vendor/patches/ changes wrpl-inspector needs to read current replays
 ```

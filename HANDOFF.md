@@ -40,9 +40,10 @@ Supporting data, fetched once per map and cached:
   **installed game**, so no calibration is ever needed.
 - `collector/fetch_maps.py` downloads the map image and its size from
   wt-tools.app. **It publishes 62 maps, which is not all of them** — checked
-  against the page itself; fortress, rheinland, alps, guadalcanal and
-  moscow_serpuhov are among the missing, and its published size is not always
-  right (see Known traps). A map image is
+  against the page itself; fortress (White Rock Fortress), rheinland, alps,
+  guadalcanal and moscow_serpuhov are among the missing, and its published size
+  is not always right (see Known traps). A missing one can be filled in by hand
+  with `tools/import_map_image.py`. A map image is
   decoration, not a dependency: the client reports the playable square as
   `grid_size` in every recording's `map_info.json`, and its centre matches the
   mission's battle area, so the geometry survives without one.
@@ -57,6 +58,19 @@ Supporting data, fetched once per map and cached:
   shares the same single word and lost a tie.
 - `bin/wtresults.exe` reads the scoreboard out of any replay file: who played,
   their scores, and which team the recording player was on.
+- `tools/import_map_image.py` makes a background for a map wt-tools does not
+  publish, out of a minimap screenshot. A screenshot says nothing about what
+  world square it covers, so the capture points supply it: the mission gives
+  their world positions, the minimap draws each as a small light disc with a
+  letter, and three known points fix scale and offset. The fit is then checked
+  rather than trusted — it has to put every cap back within 25 m, and a mirrored
+  match is rejected on the sign of the scale. White Rock Fortress came out at
+  2.6725 m/px, reproducing all three caps to within 0.5 m, and its square landed
+  within 4 px of the grid the client reported. Two traps: the letter inside a
+  disc breaks the ring into separate blobs, which have to be rejoined before
+  measuring, and judging the fit by the spread of the pairwise scale estimates
+  is misleading, because two caps 55 px apart turn half a pixel of error into
+  1% of scale. Judge it on the residual in metres.
 
 `tools/process_recording.py` calls both automatically when something is missing,
 so a map that has never been seen before needs no preparation.
@@ -75,6 +89,9 @@ python collector/auto_replay.py --rows 0,1,2
 
 # turn captures into heatmaps
 python tools/process_recording.py data/live/*/ --skip-existing
+
+# give an unpublished map a background, from a minimap screenshot
+python tools/import_map_image.py maps/<shot>.png --recording data/live/<capture>
 ```
 
 Everything is the Python standard library plus Go for the replay parsers. No

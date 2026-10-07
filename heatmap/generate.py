@@ -34,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from heatmapwt.layout import battle_area_centre  # noqa: E402
+from heatmapwt.png import write_png  # noqa: E402
 
 # Icon names the game uses, grouped into the four classes the tool filters by.
 CLASSES = {
@@ -75,21 +76,6 @@ def ramp_colour(value: float):
             t = 0.0 if hi == lo else (value - lo) / (hi - lo)
             return tuple(int(round(lerp(lo_c[i], hi_c[i], t))) for i in range(4))
     return RAMP[-1][1]
-
-
-def write_png(path: Path, width: int, height: int, pixels: list[bytes]) -> None:
-    """Write an RGBA PNG. Hand-rolled to keep the project dependency-free."""
-    raw = b"".join(b"\x00" + row for row in pixels)
-
-    def chunk(tag: bytes, data: bytes) -> bytes:
-        return (struct.pack(">I", len(data)) + tag + data
-                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
-
-    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
-    path.write_bytes(b"\x89PNG\r\n\x1a\n"
-                     + chunk(b"IHDR", header)
-                     + chunk(b"IDAT", zlib.compress(raw, 9))
-                     + chunk(b"IEND", b""))
 
 
 class Grid:
