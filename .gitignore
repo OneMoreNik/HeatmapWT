@@ -18,3 +18,8 @@ data/maps/
 
 # Generated heatmaps and viewers
 data/heatmaps/
+
+# Screen coordinates are per-machine; calibrate with
+# python overlay/overlay.py --calibrate map
+overlay/overlay_config.json
+data/overlay-cache/
