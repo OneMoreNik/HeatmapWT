@@ -128,9 +128,14 @@ Each of these cost real time; none are obvious.
   `SLIM_ZSTD_DICT` and need the archive's name map and dictionary.
 - **Record with `--speed` matching the playback speed**, or every timestamp,
   speed and dwell time is wrong by that factor.
-- **Missions name areas per difficulty.** Berlin has `_hardcore` and `_arcade`
-  variants, Tunisia only `_arcade`. Look for the best available rather than
-  assuming `_hardcore`, or most maps yield no capture points at all.
+- **Missions name their areas inconsistently, and it is worse than it looks.**
+  Berlin has `dom_capture_area_01_hardcore` and `dom_battle_area_hardcore`;
+  Tunisia defines only `_arcade` variants; Poland writes `battlearea` as one
+  word, uses `captureZone` and `tankSpawn` in camel case, marks Realistic with
+  `Rb` rather than `hardcore`, and prefixes *every* area with `briefing_`, so
+  excluding those leaves nothing at all. `heatmapwt/layout.py` normalises names
+  and picks the best difficulty variant with a fall back; use it rather than
+  matching names directly.
 - **Map bounds can change mid-battle.** When a spectated player takes a plane,
   `map_info` switches to the air map (`map_min` around `[-28672, -45056]`).
   The recorder splits on `map_generation`, which keeps the ground part clean;
@@ -204,6 +209,27 @@ Seva172 for exactly this reason. The speed is therefore set first and the click
 waits `player_list_settle_battle_s` (150 battle seconds, which is about 9 s of
 wall clock at 16x) for the roster to fill. Verified by screenshot afterwards:
 the target highlights amber with its name in a tooltip.
+
+## Tested
+
+Run after any change to the capture or analysis path:
+
+```bash
+python collector/auto_replay.py --replay <name> --follow best --speed 16 --shots shots/
+python tools/process_recording.py data/live/<capture>
+```
+
+What has been checked end to end, on four battles across three maps:
+
+- Clicks land: the replay list, the watch button, the speed control and the
+  player row were each confirmed by screenshot.
+- The speed reaches 16x and the label changes; a missed button is reported.
+- `--follow` highlights the intended player, verified by the tooltip.
+- A map never seen before (Poland) has its layout extracted from the installed
+  game and its image fetched, with no preparation.
+- Alignment holds: 100% of Poland and Tunisia samples fall inside the map
+  square, 95.6% on Berlin, and tracks start a median 24-53 m from a real spawn.
+- The automation refuses to start while a battle is live.
 
 ## Recording a live battle
 

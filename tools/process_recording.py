@@ -32,9 +32,20 @@ MODE_NAMES = {
 }
 
 
-def run(args: list[str], quiet: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run([str(a) for a in args], capture_output=quiet, text=True,
-                          encoding="utf-8", errors="replace")
+def run(args: list[str], quiet: bool = True, what: str = "") -> subprocess.CompletedProcess:
+    """Run a step, and say so when it fails.
+
+    Capturing output quietly once hid every heatmap failing on a map whose
+    mission names its areas differently: the pipeline reported success and
+    produced nothing.
+    """
+    result = subprocess.run([str(a) for a in args], capture_output=quiet, text=True,
+                            encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        print(f"  FAILED: {what or args[1]}"
+              + (f" -- {detail[-1][:160]}" if detail else ""))
+    return result
 
 
 def layout_key(battle_type: str) -> tuple[str, str]:
@@ -115,24 +126,31 @@ def process(recording: Path, args) -> bool:
 
     args.heatmaps.mkdir(parents=True, exist_ok=True)
     run([sys.executable, "tools/plot_tracks.py", recording, "--layout", layout,
-         "--map", map_dir, "--out", args.heatmaps / f"{prefix}-tracks.svg"])
+         "--map", map_dir, "--out", args.heatmaps / f"{prefix}-tracks.svg"],
+        what="track plot")
 
     tracks = recording / "tracks.csv"
+    made = 0
     for vclass in CLASSES:
         cmd = [sys.executable, "heatmap/generate.py", tracks, "--map", map_dir,
                "--layout", layout, "--out", args.heatmaps / f"{prefix}-{vclass}.png"]
         if vclass != "all":
             cmd += ["--class", vclass]
-        run(cmd)
+        made += run(cmd, what=f"heatmap {vclass}").returncode == 0
     for weighting in WEIGHTINGS:
-        run([sys.executable, "heatmap/generate.py", tracks, "--map", map_dir,
-             "--layout", layout, "--mode", weighting,
-             "--out", args.heatmaps / f"{prefix}-{weighting}.png"])
+        made += run([sys.executable, "heatmap/generate.py", tracks, "--map", map_dir,
+                     "--layout", layout, "--mode", weighting,
+                     "--out", args.heatmaps / f"{prefix}-{weighting}.png"],
+                    what=f"heatmap {weighting}").returncode == 0
+    if made == 0:
+        print("  no heatmaps produced")
+        return False
 
     viewer = args.heatmaps / f"{prefix}.html"
-    run([sys.executable, "tools/build_viewer.py", map_dir, "--heatmaps", args.heatmaps,
-         "--prefix", prefix, "--out", viewer])
-    print(f"  -> {viewer}")
+    if run([sys.executable, "tools/build_viewer.py", map_dir, "--heatmaps", args.heatmaps,
+            "--prefix", prefix, "--out", viewer], what="viewer").returncode != 0:
+        return False
+    print(f"  {made} heatmaps -> {viewer}")
     return True
 
 

@@ -15,11 +15,17 @@ from __future__ import annotations
 
 import argparse
 import base64
+import sys
 import csv
 import json
 import math
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from heatmapwt.layout import (  # noqa: E402
+    battle_area_centre, capture_points, spawns)
 
 PX_PER_M = 0.55          # drawing scale
 MARGIN_PX = 54
@@ -41,29 +47,6 @@ STYLE = {
     "spawn_t1": "#4f9dff",
     "spawn_t2": "#ff5a4d",
 }
-
-
-# Missions name their areas per difficulty: Berlin has both "_hardcore"
-# (Realistic) and "_arcade" variants, Tunisia only "_arcade". Prefer the
-# Realistic one where it exists and fall back rather than finding nothing.
-DIFFICULTY_SUFFIXES = ("_hardcore", "_arcade", "")
-
-
-def pick_areas(layout: dict, needle: str) -> list[dict]:
-    """Areas whose name contains `needle`, from the best available difficulty."""
-    areas = [a for a in layout.get("captures", [])
-             if needle in a.get("name", "") and not a.get("name", "").startswith("briefing_")]
-    for suffix in DIFFICULTY_SUFFIXES:
-        chosen = [a for a in areas if a["name"].endswith(suffix)]
-        if chosen:
-            return chosen
-    return []
-
-
-def battle_area_centre(layout: dict):
-    """Centre of the playable square, which is also the map image's centre."""
-    areas = pick_areas(layout, "battle_area")
-    return (areas[0]["x"], areas[0]["z"]) if areas else None
 
 
 def map_background(map_dir: Path, layout: dict):
@@ -158,7 +141,7 @@ def grid_lines(view: View, out: list[str]) -> None:
 
 
 def draw_layout(view: View, layout: dict, out: list[str]) -> None:
-    for cap in pick_areas(layout, "capture_area"):
+    for cap in capture_points(layout):
         name = cap["name"]
         cx, cz = view.px(cap["x"]), view.py(cap["z"])
         out.append(f'<circle cx="{cx:.1f}" cy="{cz:.1f}" r="22" fill="none" '
@@ -167,8 +150,7 @@ def draw_layout(view: View, layout: dict, out: list[str]) -> None:
         out.append(f'<text x="{cx:.1f}" y="{cz + 5:.1f}" fill="{STYLE["cap"]}" font-size="14" '
                    f'font-weight="600" text-anchor="middle">{esc(label)}</text>')
 
-    spawns = pick_areas(layout, "tank_spawn") or pick_areas(layout, "killarea")
-    for cap in spawns:
+    for cap in spawns(layout):
         name = cap["name"]
         colour = STYLE["spawn_t1"] if "t1_" in name else STYLE["spawn_t2"]
         cx, cz = view.px(cap["x"]), view.py(cap["z"])
@@ -244,7 +226,7 @@ def render(tracks: dict, layout: dict, meta: dict, background=None) -> str:
         for _, x, z in track["points"]:
             xs.append(x)
             zs.append(z)
-    for cap in pick_areas(layout, "capture_area") + pick_areas(layout, "tank_spawn"):
+    for cap in capture_points(layout) + spawns(layout):
         xs.append(cap["x"])
         zs.append(cap["z"])
     if background is not None:
