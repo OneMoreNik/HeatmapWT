@@ -60,6 +60,7 @@ MAP_ALIASES = {
     "volokolamsk_surroundings": "surroundings_of_volokolamsk",
     "el_alamein": "second_battle_of_el_alamein",
     "rhine": "advance_to_the_rhine",
+    "container_port": "cargo_port",
 }
 
 

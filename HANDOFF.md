@@ -40,8 +40,9 @@ Supporting data, fetched once per map and cached:
   **installed game**, so no calibration is ever needed.
 - `collector/fetch_maps.py` downloads the map image and its size from
   wt-tools.app. **It publishes 62 maps, which is not all of them** — checked
-  against the page itself; soviet_range, fortress, rheinland, alps,
-  guadalcanal and moscow_serpuhov are among the missing. A map image is
+  against the page itself; fortress, rheinland, alps, guadalcanal and
+  moscow_serpuhov are among the missing, and its published size is not always
+  right (see Known traps). A map image is
   decoration, not a dependency: the client reports the playable square as
   `grid_size` in every recording's `map_info.json`, and its centre matches the
   mission's battle area, so the geometry survives without one.
@@ -51,7 +52,9 @@ Supporting data, fetched once per map and cached:
   `resolve_map_key()` in `collector/fetch_maps.py` handles this by trimming
   numbering, trying shorter prefixes and then matching on shared words, with a
   short alias table for the ones that cannot be derived. Add to `MAP_ALIASES`
-  when a new one turns up.
+  when a new one turns up — and add one even when the word match happens to
+  work, as `container_port` -> `cargo_port` did only because `port_novorossiysk`
+  shares the same single word and lost a tie.
 - `bin/wtresults.exe` reads the scoreboard out of any replay file: who played,
   their scores, and which team the recording player was on.
 
@@ -154,6 +157,41 @@ Each of these cost real time; none are obvious.
   `map_info` switches to the air map (`map_min` around `[-28672, -45056]`).
   The recorder splits on `map_generation`, which keeps the ground part clean;
   without that split those frames would be converted at the wrong scale.
+- **One battle can land in several recording folders, and missing that loses
+  most of it.** `map_generation` also ticks *within* a battle, and the recorder
+  splits on it. Test-Site 2271 came out as 8.8 minutes in one folder followed by
+  13.9 in the next, and the heatmap built from the first alone covered a third
+  of the battle while looking perfectly healthy. `battle_group()` in
+  `tools/process_recording.py` rejoins folders that describe the same grid and
+  start where the previous one stopped; `build_tracks.py` takes several
+  directories and offsets each by the gap between their names. Verified on that
+  battle: 5 tracks cross the seam, the largest jump across it is 0.3 m.
+- **`grid_size` beats the published size only when `grid_steps` agrees with
+  `tile_size`.** The client's grid is usually the battle area exactly, and is
+  sometimes righter than wt-tools:
+
+  | map | wt-tools size / tile | client grid / steps |
+  |---|---|---|
+  | cargo_port | 1800 / **250** | 1800 / **250** |
+  | berlin | 1300 / **180** | 1300 / **180** |
+  | test-site_2271 | 1600 / **225** | 1700 / **225** |
+  | finland | 1700 / **225** | 2048 / **275** |
+
+  Where the tile matches, both are measuring the same grid, so a disagreement
+  over its size is wt-tools being wrong — Test-Site 2271 really is 1700 m, which
+  its own image confirms. Where the tile differs, the client is describing
+  something else: Finland reports the whole 2048 m map, with `grid_zero` on the
+  map's own corner, while its image covers 1700 m. Taking that literally
+  stretches the image by 20% and skews every track with it. `client_grid_size()`
+  in `tools/process_recording.py` checks the tile first, then falls back to
+  rejecting the whole-map shape when nothing is published to compare against.
+- **`Airdefence` is not a player SPAA.** It is the static base AA. On Fortress
+  the client reported ten of them in a single 0.8 s burst, at fixed positions
+  250-420 m outside the battle area, while the six real player SPAA came through
+  as `SPAA`. Counting both put ten phantom emplacements in that map's SPAA
+  layer. Leaving a battle makes the client emit one frame of a different entity
+  set, so `MIN_TRACK_SECONDS` drops anything under 2 s as well — at 20 Hz a
+  0.8 s burst is 17 samples, easily enough to pass a sample-count threshold.
 
 ## What the playback method cannot do
 
@@ -233,7 +271,7 @@ python collector/auto_replay.py --replay <name> --follow best --speed 16 --shots
 python tools/process_recording.py data/live/<capture>
 ```
 
-What has been checked end to end, on four battles across three maps:
+What has been checked end to end, on eight battles across seven maps:
 
 - Clicks land: the replay list, the watch button, the speed control and the
   player row were each confirmed by screenshot.
@@ -250,6 +288,16 @@ What has been checked end to end, on four battles across three maps:
 - A live battle records and processes: 56 tracks and 106,838 samples from one
   battle at 20 Hz in real time.
 - The automation refuses to start while a battle is live.
+- Three consecutive live battles capture and process unattended, with no
+  replay playback at all: Cargo Port 23 tracks / 37,838 samples, Finland 43 /
+  120,761, Fortress 23 / 59,268. The recorder had been left running and each
+  battle landed in its own folder.
+- Folders are rejoined correctly: Test-Site 2271's two folders merge into one
+  22.4 minute timeline, 63 tracks and 198,339 samples, with 5 tracks crossing
+  the seam and a largest jump across it of 0.3 m.
+- Out-of-square samples are dropped, not clamped to the edge: `Grid.add` returns
+  False, so Fortress's 170 off-map staging samples vanish rather than piling up
+  along the south boundary.
 
 ## Recording a live battle
 

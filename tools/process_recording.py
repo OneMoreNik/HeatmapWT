@@ -20,7 +20,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "collector"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from build_tracks import folder_start  # noqa: E402
 from fetch_maps import resolve_map_key  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -115,6 +117,108 @@ def ensure_map(source: dict, out: Path) -> Path | None:
     return path if (path / "map.json").exists() else None
 
 
+def last_timestamp(csv_path: Path) -> float | None:
+    """The `t` of the last row, read from the end of the file.
+
+    A recording's map_obj.csv runs to hundreds of megabytes, so this seeks
+    rather than reads.
+    """
+    try:
+        with open(csv_path, "rb") as handle:
+            handle.seek(0, 2)
+            handle.seek(max(0, handle.tell() - 8192))
+            tail = handle.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(tail):
+        head = line.split(",", 1)[0]
+        try:
+            return float(head)
+        except ValueError:
+            continue
+    return None
+
+
+def same_grid(a: dict, b: dict) -> bool:
+    for key in ("grid_size", "grid_zero", "map_min", "map_max"):
+        pa, pb = a.get(key) or [], b.get(key) or []
+        if len(pa) != len(pb) or any(abs(x - y) > 1.0 for x, y in zip(pa, pb)):
+            return False
+    return True
+
+
+def battle_group(recording: Path) -> list[Path]:
+    """`recording` plus any folders that continue the same battle.
+
+    `sample_map` opens a new folder whenever `map_generation` changes, and that
+    can tick mid-battle: Test-Site 2271 came out as 8.8 minutes in one folder
+    and 13.9 in the next, and processing only the first silently threw away two
+    thirds of the battle. A follower counts as a continuation when it describes
+    the same grid and starts where the previous one stopped.
+    """
+    siblings = sorted(d for d in recording.parent.iterdir()
+                      if d.is_dir() and d.name > recording.name
+                      and (d / "map_info.json").exists())
+    group = [recording]
+    for candidate in siblings:
+        previous = group[-1]
+        start_prev = folder_start(previous)
+        start_next = folder_start(candidate)
+        duration = last_timestamp(previous / "map_obj.csv")
+        if start_prev is None or start_next is None or duration is None:
+            break
+        if abs((start_next - start_prev) - duration) > 60.0:
+            break
+        if not same_grid(json.loads((previous / "map_info.json").read_text(encoding="utf-8")),
+                         json.loads((candidate / "map_info.json").read_text(encoding="utf-8"))):
+            break
+        group.append(candidate)
+    return group
+
+
+def client_grid_size(info: dict, map_meta: dict | None) -> float | None:
+    """The playable square the client reported, or None to use the published one.
+
+    The client's grid is usually the battle area exactly, and is sometimes more
+    accurate than the size published with the image. `grid_steps`, the spacing
+    of the labelled grid lines, says whether the two are describing the same
+    square at all:
+
+        map              published size/tile   client grid/steps
+        cargo_port             1800 / 250          1800 / 250
+        berlin                 1300 / 180          1300 / 180
+        test-site_2271         1600 / 225          1700 / 225
+        finland                1700 / 225          2048 / 275
+
+    Where the tile matches, the client is measuring the same grid, so a
+    disagreement over its size is wt-tools being wrong: Test-Site 2271 really is
+    1700 m, which its own image confirms. Where the tile differs, the client is
+    describing something else. Finland reports the whole 2048 m map, with
+    `grid_zero` on the map's own corner, while its image covers 1700 m; taking
+    that literally stretches the image by 20%.
+
+    So the client wins only when it is talking about the same grid. Without a
+    published size to compare against, the whole-map shape is the only tell.
+    """
+    grid = info.get("grid_size") or []
+    if not grid or not grid[0]:
+        return None
+    size = float(grid[0])
+    steps = (info.get("grid_steps") or [None])[0]
+
+    tile = (map_meta or {}).get("tile_m")
+    if tile and steps and abs(float(tile) - float(steps)) > 1.0:
+        return None
+
+    mn, mx = info.get("map_min") or [], info.get("map_max") or []
+    zero = info.get("grid_zero") or []
+    if len(mn) >= 2 and len(mx) >= 2 and len(zero) >= 2:
+        if (abs((mx[0] - mn[0]) - size) < 1.0 and abs(zero[0] - mn[0]) < 1.0
+                and abs(zero[1] - mx[1]) < 1.0):
+            return None
+    return size
+
+
 def process(recording: Path, args) -> bool:
     source_path = recording / "source.json"
     if not source_path.exists():
@@ -137,27 +241,34 @@ def process(recording: Path, args) -> bool:
 
     map_dir = ensure_map(source, args.maps)
 
-    # The client reports the playable square it actually used. Prefer it over
-    # the size published with the image, which has been seen to disagree.
-    size_m = None
     info = json.loads((recording / "map_info.json").read_text(encoding="utf-8"))
-    grid = info.get("grid_size") or []
-    if len(grid) >= 1 and grid[0]:
-        size_m = float(grid[0])
+    meta_path = (map_dir / "map.json") if map_dir else None
+    map_meta = (json.loads(meta_path.read_text(encoding="utf-8"))
+                if meta_path and meta_path.exists() else None)
+    size_m = client_grid_size(info, map_meta)
 
     if map_dir is None:
         # wt-tools publishes 62 maps, not all of them. The client reports the
         # playable square as grid_size, and its centre matches the mission's
         # battle area, so the geometry survives without an image.
+        if size_m is None:
+            # With no image there is no published size to protect, so even the
+            # whole-map grid is better than nothing: a wider view, still exact.
+            grid = info.get("grid_size") or []
+            size_m = float(grid[0]) if grid and grid[0] else None
         if size_m:
             print(f"  no map image published; using the client's "
                   f"{size_m:.0f} m grid instead")
         else:
-            print("  no map image and no grid size; cannot continue")
+            print("  no map image and no usable grid size; cannot continue")
             return False
 
     speed = source.get("speed", 1)
-    result = run([sys.executable, "tools/build_tracks.py", recording, "--speed", speed],
+    group = battle_group(recording)
+    if len(group) > 1:
+        print(f"  continues into {len(group) - 1} more folder(s): "
+              + ", ".join(d.name for d in group[1:]))
+    result = run([sys.executable, "tools/build_tracks.py", *group, "--speed", speed],
                  quiet=True)
     for line in result.stdout.splitlines()[1:4]:
         print(" ", line.strip())

@@ -17,16 +17,24 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 # Vehicle classes drawn on the tank map. SPAA and tank destroyers count; the
 # scenery, zones and airfield markers do not.
+#
+# "Airdefence" is NOT a player SPAA. On Fortress the client reported ten of them
+# in a single 0.8 s burst, at fixed positions 250-420 m outside the battle area,
+# which is the static base AA rather than anything anyone drove. Player SPAA
+# come through as "SPAA", six of them in the same battle. Counting both put ten
+# phantom emplacements into that map's SPAA layer.
 GROUND_ICONS = {
     "LightTank", "MediumTank", "HeavyTank", "TankDestroyer", "SPAA",
-    "Airdefence", "Assault", "Player",
+    "Assault", "Player",
 }
 
 # The API types aircraft separately from ground vehicles, so a player who
@@ -43,6 +51,11 @@ MIN_RADIUS_M = 25.0
 TRACK_GAP_S = 12.0
 # A track shorter than this is noise, not a route.
 MIN_TRACK_SAMPLES = 4
+# And one that lasts less than this is a transition artefact. Leaving a battle
+# makes the client emit one frame of a different entity set, which at 20 Hz is
+# plenty of samples to clear MIN_TRACK_SAMPLES while covering under a second.
+# A vehicle that really dies seconds after spawning still lasts longer.
+MIN_TRACK_SECONDS = 2.0
 
 
 def side_of(color: str) -> str:
@@ -111,6 +124,38 @@ class WorldMapping:
             return x, y
         return (self.min[0] + x * (self.max[0] - self.min[0]),
                 self.max[1] - y * (self.max[1] - self.min[1]))
+
+
+def folder_start(recording: Path) -> float | None:
+    """Seconds-of-epoch-ish stamp from a recording folder's name.
+
+    Folder names begin "YYYYMMDD-HHMMSS". Only differences between them are
+    used, so the clock they came from does not have to agree with anything.
+    """
+    match = re.match(r"(\d{8})-(\d{6})", recording.name)
+    if not match:
+        return None
+    day, clock = match.groups()
+    stamp = datetime.datetime(int(day[:4]), int(day[4:6]), int(day[6:]),
+                              int(clock[:2]), int(clock[2:4]), int(clock[4:]))
+    return stamp.timestamp()
+
+
+def read_many(recordings: list[Path], mapping: WorldMapping):
+    """Frames from several recordings of one battle, on a single timeline.
+
+    `sample_map` starts a new folder whenever `map_generation` changes, and that
+    can tick in the middle of a battle: Test-Site 2271 came out as 8.8 minutes
+    followed by 13.9, and processing only the first lost two thirds of it. Each
+    folder times from its own start, so later ones are shifted by the gap
+    between their names.
+    """
+    base = folder_start(recordings[0])
+    for recording in recordings:
+        start = folder_start(recording)
+        offset = (start - base) if (base is not None and start is not None) else 0.0
+        for t, observations in read_frames(recording / "map_obj.csv", mapping):
+            yield t + offset, observations
 
 
 def read_frames(csv_path: Path, mapping: WorldMapping):
@@ -206,7 +251,9 @@ def stitch(frames) -> list[Track]:
             active.append(track)
 
     done.extend(active)
-    return [t for t in done if len(t.samples) >= MIN_TRACK_SAMPLES]
+    return [t for t in done
+            if len(t.samples) >= MIN_TRACK_SAMPLES
+            and t.samples[-1][0] - t.samples[0][0] >= MIN_TRACK_SECONDS]
 
 
 def write_tracks(out_path: Path, tracks: list[Track]) -> None:
@@ -222,15 +269,18 @@ def write_tracks(out_path: Path, tracks: list[Track]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("recording", type=Path, help="a data/live/<recording> directory")
+    parser.add_argument("recordings", nargs="+", type=Path,
+                        help="one or more data/live/<recording> directories. Several "
+                             "are treated as one battle, in the order given, and the "
+                             "tracks are written beside the first")
     parser.add_argument("--speed", type=float, default=1.0,
                         help="replay playback speed used while recording, so wall-clock "
                              "timestamps become battle seconds")
     args = parser.parse_args()
 
-    info = json.loads((args.recording / "map_info.json").read_text())
+    info = json.loads((args.recordings[0] / "map_info.json").read_text())
     mapping = WorldMapping(info)
-    tracks = stitch(read_frames(args.recording / "map_obj.csv", mapping))
+    tracks = stitch(read_many(args.recordings, mapping))
 
     # Recording a replay played back at speed compresses wall-clock time;
     # rescale so timestamps, speeds and dwell times are in battle seconds.
@@ -238,13 +288,13 @@ def main() -> int:
         for track in tracks:
             track.samples = [(t * args.speed, x, z) for t, x, z in track.samples]
 
-    out_path = args.recording / "tracks.csv"
+    out_path = args.recordings[0] / "tracks.csv"
     write_tracks(out_path, tracks)
 
     by_team: dict[str, int] = {}
     for track in tracks:
         by_team[track.team] = by_team.get(track.team, 0) + 1
-    print(f"{args.recording}")
+    print(" + ".join(str(r) for r in args.recordings))
     print(f"  map {mapping.min} .. {mapping.max}")
     print(f"  {len(tracks)} tracks: " + ", ".join(f"{n} {k}" for k, n in sorted(by_team.items())))
     print(f"  {sum(len(t.samples) for t in tracks)} samples -> {out_path}")

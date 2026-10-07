@@ -41,7 +41,9 @@ CLASSES = {
     "medium": {"MediumTank"},
     "light": {"LightTank"},
     "td": {"TankDestroyer"},
-    "spaa": {"SPAA", "Airdefence"},
+    # "Airdefence" is the static base AA, not a player SPAA; build_tracks
+    # drops it before it reaches here.
+    "spaa": {"SPAA"},
 }
 # "Player" is whichever vehicle was being spectated, so its class is unknown
 # from the map data alone; it is kept only when no class filter is applied.
