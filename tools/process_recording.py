@@ -19,6 +19,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "collector"))
+
+from fetch_maps import resolve_map_key  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -88,13 +91,25 @@ def ensure_layout(source: dict, out: Path) -> Path | None:
 
 
 def ensure_map(source: dict, out: Path) -> Path | None:
-    """Map image for this layout, downloaded from wt-tools if absent."""
+    """Map image for this layout, downloaded from wt-tools if it publishes one.
+
+    Returns None when it does not, which is normal: wt-tools has 62 maps and
+    the game has more. The caller falls back to the client's own grid.
+    """
     map_name, layout = layout_key(source["battleType"])
     mode = wt_tools_mode(layout)
-    path = out / map_name / mode
+
+    manifest_path = out / "manifest.json"
+    key = map_name
+    if manifest_path.exists():
+        key = resolve_map_key(json.loads(manifest_path.read_text(encoding="utf-8")),
+                              map_name) or map_name
+    path = out / key / mode
     if (path / "map.json").exists():
         return path
-    print(f"  fetching the map image for {map_name}/{mode}")
+
+    print(f"  fetching the map image for {map_name}"
+          + (f" (published as {key})" if key != map_name else "") + f"/{mode}")
     run([sys.executable, "collector/fetch_maps.py", map_name, "--mode", mode,
          "--out", out], quiet=True)
     return path if (path / "map.json").exists() else None

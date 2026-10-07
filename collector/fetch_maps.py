@@ -48,6 +48,52 @@ def load_manifest() -> dict:
     return json.loads(fetch(MANIFEST_URL).decode("utf-8"))
 
 
+# The game's internal map name and wt-tools' key often differ: the game calls
+# it "hurtgen" where wt-tools says "battle_of_hurtgen_forest", "vietnam_hills"
+# against "vietnam", "eastern_europe_02" against "eastern_europe". These are
+# resolved by shape where possible, and listed here where they cannot be.
+MAP_ALIASES = {
+    "hurtgen": "battle_of_hurtgen_forest",
+    "normandy_fields": "fields_of_normandy",
+    "poland_fields": "fields_of_poland",
+    "volokolamsk_surroundings": "surroundings_of_volokolamsk",
+    "el_alamein": "second_battle_of_el_alamein",
+    "rhine": "advance_to_the_rhine",
+}
+
+
+def resolve_map_key(manifest: dict, name: str) -> str | None:
+    """wt-tools' key for a map the game calls `name`, or None.
+
+    Tries, in order: the name itself, a known alias, the name with trailing
+    numbering removed, progressively shorter prefixes, and finally any key
+    whose words are a subset of the name's. wt-tools publishes 62 maps and the
+    game has more, so None is a normal answer, not a failure.
+    """
+    if name in manifest:
+        return name
+    alias = MAP_ALIASES.get(name)
+    if alias in manifest:
+        return alias
+
+    words = name.split("_")
+    # "eastern_europe_02" -> "eastern_europe"
+    while words and words[-1].isdigit():
+        words.pop()
+    for cut in range(len(words), 0, -1):
+        candidate = "_".join(words[:cut])
+        if candidate in manifest:
+            return candidate
+
+    # "battle_of_hurtgen_forest" contains "hurtgen"; prefer the longest match
+    # so "poland" does not win over "fields_of_poland" for "poland_fields".
+    wordset = set(words)
+    matches = [k for k in manifest if wordset & set(k.split("_"))]
+    if matches:
+        return max(matches, key=lambda k: len(wordset & set(k.split("_"))))
+    return None
+
+
 def png_size(data: bytes) -> tuple[int, int] | None:
     """Width and height from a PNG header, without a decoder."""
     if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -122,11 +168,15 @@ def main() -> int:
         return 0
 
     for map_key in args.maps:
-        if map_key not in manifest:
-            near = [k for k in manifest if map_key.lower() in k.lower()]
-            print(f"{map_key}: not in the manifest" +
-                  (f"; did you mean {', '.join(near)}?" if near else ""))
+        resolved = resolve_map_key(manifest, map_key)
+        if resolved is None:
+            print(f"{map_key}: wt-tools does not publish this map "
+                  f"(it has {len(manifest)}); the pipeline will use the client's "
+                  f"own grid instead of an image")
             continue
+        if resolved != map_key:
+            print(f"{map_key}: published as {resolved!r}")
+        map_key = resolved
         modes = manifest[map_key]
         wanted = args.mode or list(modes)
         print(f"{map_key}: {len(wanted)} of {len(modes)} modes -> {args.out / map_key}")

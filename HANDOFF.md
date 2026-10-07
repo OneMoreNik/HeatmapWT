@@ -39,11 +39,19 @@ Supporting data, fetched once per map and cached:
 - `bin/wtlevel.exe` reads capture points, spawns and the battle area out of the
   **installed game**, so no calibration is ever needed.
 - `collector/fetch_maps.py` downloads the map image and its size from
-  wt-tools.app. **It indexes 62 maps, which is not all of them** — soviet_range,
-  guadalcanal and alps are among the missing. A map image is decoration, not a
-  dependency: the client reports the playable square as `grid_size` in every
-  recording's `map_info.json`, and its centre matches the mission's battle
-  area, so the geometry survives without one.
+  wt-tools.app. **It publishes 62 maps, which is not all of them** — checked
+  against the page itself; soviet_range, fortress, rheinland, alps,
+  guadalcanal and moscow_serpuhov are among the missing. A map image is
+  decoration, not a dependency: the client reports the playable square as
+  `grid_size` in every recording's `map_info.json`, and its centre matches the
+  mission's battle area, so the geometry survives without one.
+- **The game's map name and wt-tools' key often differ.** The game says
+  `hurtgen` where wt-tools says `battle_of_hurtgen_forest`, `vietnam_hills`
+  against `vietnam`, `eastern_europe_02` against `eastern_europe`.
+  `resolve_map_key()` in `collector/fetch_maps.py` handles this by trimming
+  numbering, trying shorter prefixes and then matching on shared words, with a
+  short alias table for the ones that cannot be derived. Add to `MAP_ALIASES`
+  when a new one turns up.
 - `bin/wtresults.exe` reads the scoreboard out of any replay file: who played,
   their scores, and which team the recording player was on.
 
