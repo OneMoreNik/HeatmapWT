@@ -439,6 +439,55 @@ One battle per layout is not a heatmap, it is a single battle drawn in colour.
 Five or six on the same map and mode is where a hot spot starts to mean "people
 go here" rather than "someone went here once".
 
+## The overlay
+
+`overlay/overlay.py` puts those heatmaps on the screen over the game.
+
+```bash
+python overlay/overlay.py --calibrate map       # once, per screen layout
+python overlay/overlay.py --calibrate minimap
+python overlay/overlay.py                       # then leave it running
+```
+
+    Ctrl+Q   over the big pre-battle tactical map
+    Ctrl+E   over the minimap
+    Ctrl+R   next vehicle class
+    Ctrl+D   hide
+
+It picks the map itself. Polling `map_info.json` gives the square the client is
+drawing, and that is matched against the built heatmaps by where they sit in the
+world, so nothing has to be chosen by hand. Verified on all 13 recorded battles.
+
+Three things that make the matching work:
+
+- **Scored on distance, not equality.** A heatmap drawn at the published size
+  sits on the mission's battle area while the client may report the whole map,
+  so the squares agree on where but not always on how big. Finland differs by
+  32 m that way.
+- **A reading has to appear twice before the map switches.** The client briefly
+  reports a different grid around a map change: one Berlin Conquest-2 capture
+  opens with a 1700 m grid before settling to the real 1300 m one, and a single
+  frame of that would swap the map mid-battle.
+- **Layouts that share a square fall back to the whole-map combination.** Middle
+  East reports the same 2048 m square for both its Domination and its Conquest
+  layout, so nothing distinguishes them; `middle_east-all` holds both.
+
+Mechanics worth knowing:
+
+- The window is `WS_EX_LAYERED | WS_EX_TRANSPARENT`, so clicks fall through and
+  the game never sees it.
+- Hotkeys are polled with `GetAsyncKeyState` rather than registered with
+  `RegisterHotKey`. Polling does not swallow the key, so whatever the game binds
+  to Ctrl+Q still happens. Nothing is injected into the game.
+- Tk makes exactly one colour transparent, so cells below an alpha floor are
+  painted `#010203`, a colour the ramp never produces. Blending towards it
+  instead would tint every faint cell near-black and fog the map.
+- Tk only scales images by whole numbers, so resampling is done here and cached
+  per size under `data/overlay-cache`: 1.1 s the first time at 700x700, instant
+  after.
+- It reads only the HTTP endpoint the game already serves to its own web map. No
+  memory, no files, no input.
+
 ## Next steps, in order
 
 1. **Volume.** Everything rests on one battle per map. Several battles on the
