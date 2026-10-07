@@ -36,6 +36,7 @@ from pathlib import Path
 # on IPv4, and every request then pays the full connect timeout before falling
 # back. That alone capped sampling at 0.5 Hz.
 HOST = "127.0.0.1"
+PNG_MAGIC = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
 PORT = 8111
 
 # How often to re-read map_info while recording, in seconds.
@@ -71,6 +72,21 @@ class Api:
             except OSError:
                 pass
             self.conn = None
+
+    def get_bytes(self, path: str) -> bytes | None:
+        """One endpoint's raw body, or None if unavailable."""
+        for attempt in (0, 1):
+            try:
+                conn = self._connect()
+                conn.request("GET", f"/{path}", headers={"Connection": "keep-alive"})
+                response = conn.getresponse()
+                body = response.read()
+                return body if response.status == 200 and body else None
+            except (OSError, http.client.HTTPException):
+                self.close()
+                if attempt:
+                    return None
+        return None
 
     def get(self, path: str):
         """Decoded JSON from one endpoint, or None if unavailable."""
@@ -140,13 +156,22 @@ def row_for(obj: dict, mapping: WorldMapping, t: float, frame: int, idx: int) ->
 class Recording:
     """One map's worth of samples, written as it goes."""
 
-    def __init__(self, out_dir: Path, label: str, info: dict):
+    def __init__(self, out_dir: Path, label: str, info: dict, api=None):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         generation = info.get("map_generation", "?")
         name = "-".join(p for p in (stamp, f"gen{generation}", label) if p)
         self.dir = out_dir / name
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "map_info.json").write_text(json.dumps(info, indent=2))
+
+        # The client's own picture of this map. It is the battle area exactly,
+        # needs no alias or published size, and identifies the map on sight --
+        # all of which the grid numbers only approximate. Cheap to keep: one
+        # small PNG per recording.
+        if api is not None:
+            image = api.get_bytes("map.img")
+            if image and image.startswith(PNG_MAGIC):
+                (self.dir / "map.img.png").write_bytes(image)
 
         self.mapping = WorldMapping(info)
         self.generation = generation
@@ -235,7 +260,7 @@ def record(out_dir: Path, label: str, hz: float) -> None:
             if current is None or info.get("map_generation", "?") != current.generation:
                 if current is not None:
                     current.close()
-                current = Recording(out_dir, label, info)
+                current = Recording(out_dir, label, info, api)
 
             objects = api.get("map_obj.json")
             if isinstance(objects, list) and objects:

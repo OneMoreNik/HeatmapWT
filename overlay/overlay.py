@@ -45,9 +45,9 @@ KEY_MS = 40
 
 CLASSES = ["all", "heavy", "medium", "light", "td", "spaa", "routes", "stops"]
 
-# A built heatmap this far from the live square is a different battlefield.
-# Berlin's two layouts are 138 m apart and have to stay distinguishable.
-MATCH_LIMIT_M = 400.0
+# Grid numbers come from the same source on both sides, so they should agree
+# exactly; this only absorbs float noise.
+FINGERPRINT_TOLERANCE_M = 1.0
 
 # Below this the heatmap has nothing to say, and drawing it as near-black haze
 # over the map only makes the map harder to read.
@@ -97,14 +97,21 @@ def map_info() -> dict | None:
     return info if info.get("valid") else None
 
 
-def live_square(info: dict) -> tuple[float, tuple[float, float]] | None:
-    """The square the client is drawing, as (size, centre)."""
-    grid = info.get("grid_size") or []
-    zero = info.get("grid_zero") or []
-    if len(grid) < 2 or not grid[0] or not grid[1] or len(zero) < 2:
-        return None
-    return (max(float(grid[0]), float(grid[1])),
-            (zero[0] + float(grid[0]) / 2, zero[1] - float(grid[1]) / 2))
+def fingerprint(info: dict) -> list[float] | None:
+    """Everything `map_info` says about the shape of the map, as one key."""
+    parts = []
+    for key in ("grid_zero", "grid_size", "grid_steps", "map_min", "map_max"):
+        value = info.get(key) or []
+        if len(value) < 2:
+            return None
+        parts += [round(float(value[0]), 2), round(float(value[1]), 2)]
+    return parts
+
+
+def matches(live: list[float], known: list[float]) -> bool:
+    return (len(live) == len(known)
+            and all(abs(a - b) <= FINGERPRINT_TOLERANCE_M
+                    for a, b in zip(live, known)))
 
 
 class Library:
@@ -117,66 +124,51 @@ class Library:
 
     def reload(self) -> None:
         self.entries = []
-        # Only what build_map.py produced. process_recording.py writes a
-        # sidecar per battle with the same shape, and those are for checking a
-        # capture worked, not for reading before a battle -- indexing them would
-        # offer a single battle where every battle on that map is available.
-        for sidecar in sorted(self.heatmaps.glob("*-all-all.json")):
-            meta = json.loads(sidecar.read_text(encoding="utf-8"))
-            world = meta.get("world") or {}
-            if not world.get("size_m"):
-                continue
-            prefix = sidecar.name[:-len("-all.json")]
-            size = float(world["size_m"])
-            # build_map names a layout "<map>-<layout>-all" and a whole map
-            # "<map>-all". The whole-map one mixes game modes, so it is a
-            # fallback rather than a preference when both cover the same square.
+        # build_map.py writes one index per combined heatmap. process_recording
+        # writes a per-battle sidecar of the same shape but no index: those are
+        # for checking a capture worked, not for reading before a battle.
+        for index_path in sorted(self.heatmaps.glob("*.index.json")):
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            prefix = index["prefix"]
+            sidecar = self.heatmaps / f"{prefix}-all.json"
+            counts = {}
+            if sidecar.exists():
+                counts = json.loads(sidecar.read_text(encoding="utf-8")).get("counts", {})
             self.entries.append({
                 "prefix": prefix,
-                "whole_map": "-" not in prefix[:-len("-all")],
-                "size": size,
-                "centre": (world["min_x"] + size / 2, world["min_z"] + size / 2),
-                "battles": (meta.get("counts") or {}).get("battles", 0),
+                "whole_map": bool(index.get("whole_map")),
+                "fingerprints": index.get("fingerprints") or [],
+                "battles": counts.get("battles", 0),
                 "classes": [c for c in CLASSES
                             if (self.heatmaps / f"{prefix}-{c}.png").exists()],
             })
 
-    def match(self, size: float, centre: tuple[float, float]) -> dict | None:
-        """The built heatmap covering the same ground, or None.
+    def match(self, info: dict) -> dict | None:
+        """The heatmap built for the map the client is showing, or None.
 
-        Scored on distance rather than equality: a heatmap drawn at the
-        published size sits on the mission's battle area, while the client may
-        report the whole map, so the two squares agree on where but not always
-        on how big. Finland differs by 32 m that way.
+        Identified by what `map_info` reports, not by where the square happens
+        to sit. Matching on the centre and size alone put Attica on Cargo Port's
+        heatmap, because their battle areas are close enough together: a near
+        miss is not a map, and drawing the wrong one confidently is worse than
+        drawing nothing.
         """
-        scored = []
-        for entry in self.entries:
-            distance = math.dist(entry["centre"], centre)
-            if distance > MATCH_LIMIT_M:
-                continue
-            score = distance + abs(entry["size"] - size) / 10
-            # Berlin's whole-map heatmap sits on the same square as its
-            # Conquest-2 one, so they score identically. Break that towards
-            # more battles; a genuinely closer square still wins, which is what
-            # keeps Berlin Domination, 138 m away, from being swallowed.
-            scored.append((score, entry))
-        if not scored:
+        live = fingerprint(info)
+        if live is None:
+            return None
+        hits = [entry for entry in self.entries
+                if any(matches(live, known) for known in entry["fingerprints"])]
+        if not hits:
             return None
 
-        best = min(score for score, _ in scored)
-        tied = [entry for score, entry in scored if score <= best + 1.0]
-
-        # Two layouts can describe the same square and then nothing in
-        # `map_info` tells them apart: Middle East reports the whole 2048 m map
-        # for both its Domination and its Conquest layout. Guessing one would be
-        # right half the time, so the whole-map combination is used instead --
-        # it holds both, and mixing modes is the lesser error.
-        layouts = {entry["prefix"] for entry in tied if not entry["whole_map"]}
+        # Two layouts of one map can report the same grid -- Middle East does
+        # for both of its -- and then nothing distinguishes them. The whole-map
+        # combination holds both, so it is the honest answer.
+        layouts = {entry["prefix"] for entry in hits if not entry["whole_map"]}
         if len(layouts) > 1:
-            whole = [entry for entry in tied if entry["whole_map"]]
+            whole = [entry for entry in hits if entry["whole_map"]]
             if whole:
                 return max(whole, key=lambda entry: entry["battles"])
-        return min(tied, key=lambda entry: (entry["whole_map"], -entry["battles"]))
+        return min(hits, key=lambda entry: (entry["whole_map"], -entry["battles"]))
 
 
 def fit(src_path: Path, width: int, height: int, cache: Path) -> Path:
@@ -292,13 +284,12 @@ class Overlay:
     def poll_game(self) -> None:
         info = map_info()
         if info:
-            square = live_square(info)
-            if square:
-                found = self.library.match(*square)
+            if fingerprint(info) is not None:
+                found = self.library.match(info)
                 if found is None:
                     # Could be a map recorded since this started running.
                     self.library.reload()
-                    found = self.library.match(*square)
+                    found = self.library.match(info)
                 name = found["prefix"] if found else None
 
                 # Switch only on a reading seen twice. The client briefly

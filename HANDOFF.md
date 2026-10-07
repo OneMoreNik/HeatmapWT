@@ -454,23 +454,38 @@ python overlay/overlay.py                       # then leave it running
     Ctrl+R   next vehicle class
     Ctrl+D   hide
 
-It picks the map itself. Polling `map_info.json` gives the square the client is
-drawing, and that is matched against the built heatmaps by where they sit in the
-world, so nothing has to be chosen by hand. Verified on all 13 recorded battles.
+It picks the map itself, from `map_info.json`.
 
-Three things that make the matching work:
+**Identify the map by the whole of `map_info`, never by where its square sits.**
+The first version matched on the centre and size of the playable square within a
+400 m radius, and put **Attica on Cargo Port's heatmap** -- their battle areas
+are close enough together -- then drew it with full confidence. A near miss is
+not a map. `grid_zero`, both grid sides, `grid_steps` and the map extent
+together are distinctive: across every recording made so far no two different
+maps share them, and the only collisions are between layouts of one map. The
+numbers come from the same source on both sides, so they are compared for
+equality, and anything unrecognised shows nothing at all.
 
-- **Scored on distance, not equality.** A heatmap drawn at the published size
-  sits on the mission's battle area while the client may report the whole map,
-  so the squares agree on where but not always on how big. Finland differs by
-  32 m that way.
-- **A reading has to appear twice before the map switches.** The client briefly
-  reports a different grid around a map change: one Berlin Conquest-2 capture
-  opens with a 1700 m grid before settling to the real 1300 m one, and a single
-  frame of that would swap the map mid-battle.
-- **Layouts that share a square fall back to the whole-map combination.** Middle
-  East reports the same 2048 m square for both its Domination and its Conquest
-  layout, so nothing distinguishes them; `middle_east-all` holds both.
+`build_map.py` writes those fingerprints to `<prefix>.index.json` beside each
+combined heatmap. Two details matter:
+
+- **Every capture contributes a fingerprint, not just the deduplicated one.**
+  Deduplicating by session is right for counting battles and weighting the
+  density, and wrong for recognition: a capture can open on a transient grid
+  before the client settles, and a Berlin Conquest-2 capture does exactly that.
+- **A reading has to appear twice before the map switches**, for the same
+  reason -- a single frame of a transient grid would otherwise swap the map
+  mid-battle.
+
+Where two layouts of one map genuinely report the same grid, as both Middle East
+layouts do and as Berlin's transient reading does, nothing can tell them apart,
+so the whole-map combination is used: it holds both, and guessing would be right
+half the time.
+
+`sample_map.py` now also saves `map.img`, the client's own picture of the map,
+with every recording. It is the battle area exactly, needs no alias or published
+size, and would identify a map on sight -- all of which the grid numbers only
+approximate. Nothing reads it yet; it is being collected so that it can.
 
 Mechanics worth knowing:
 

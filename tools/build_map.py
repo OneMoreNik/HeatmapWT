@@ -37,6 +37,60 @@ if hasattr(sys.stdout, "reconfigure"):
 SQUARE_TOLERANCE_M = 5.0
 
 
+def fingerprint(info: dict) -> list[float] | None:
+    """Everything `map_info` says about the shape of the map, as one key.
+
+    Matching a live map to a heatmap by the centre and size of its square alone
+    is not enough to tell maps apart: Attica's battle area sits close enough to
+    Cargo Port's that it matched, and the overlay confidently drew the wrong
+    map. The grid origin, both grid sides, the grid step and the map extent
+    together are distinctive -- across every recording made so far no two
+    different maps share them, and the only collisions are between layouts of
+    one map, which is a known ambiguity handled elsewhere.
+    """
+    parts = []
+    for key in ("grid_zero", "grid_size", "grid_steps", "map_min", "map_max"):
+        value = info.get(key) or []
+        if len(value) < 2:
+            return None
+        parts += [round(float(value[0]), 2), round(float(value[1]), 2)]
+    return parts
+
+
+# A hangar or air-map grid, not a ground battle: 32768 m and up.
+MAX_GROUND_GRID_M = 8000.0
+
+
+def fingerprints_for(live: Path, battle_types: list[str]) -> list[list[float]]:
+    """Every grid these battle types have ever been seen with.
+
+    Deduplicating captures is right for counting battles and weighting the
+    density, but wrong for recognising a map later: a capture can open on a
+    transient grid before the client settles, and one Berlin Conquest-2 capture
+    does exactly that. Any reading the client has produced for this map is worth
+    recognising, so every capture contributes, including ones whose tracks were
+    never built.
+    """
+    out: list[list[float]] = []
+    for source_path in sorted(live.glob("*/source.json")):
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        if source.get("battleType") not in battle_types:
+            continue
+        info_path = source_path.parent / "map_info.json"
+        if not info_path.exists():
+            continue
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+        if info.get("hud_type") == 0:
+            continue
+        grid = info.get("grid_size") or []
+        if not grid or float(grid[0]) > MAX_GROUND_GRID_M:
+            continue
+        key = fingerprint(info)
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
 def describe(size_m: float | None, centre: tuple[float, float] | None) -> str:
     if size_m is None:
         return "the published size on the mission's battle area"
@@ -149,6 +203,20 @@ def build(key: str, members: list[tuple[Path, dict]], args,
     made = render_set(tracks, layout, map_dir, size_m, centre, prefix,
                       args.heatmaps, battle_type)
     if made:
+        # What the client reported for each battle that went in, so the overlay
+        # can recognise this map from the live endpoint rather than guessing
+        # from the shape of its square.
+        types = []
+        for _, source in members:
+            if source.get("battleType") not in types:
+                types.append(source.get("battleType"))
+        prints = fingerprints_for(args.live, types)
+        (args.heatmaps / f"{prefix}.index.json").write_text(json.dumps({
+            "prefix": prefix,
+            "battle_types": types,
+            "whole_map": whole_map,
+            "fingerprints": prints,
+        }, indent=2), encoding="utf-8")
         sidecar = args.heatmaps / f"{prefix}-all.json"
         if sidecar.exists():
             counts = json.loads(sidecar.read_text(encoding="utf-8")).get("counts", {})
