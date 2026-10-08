@@ -87,7 +87,8 @@ python collector/auto_replay.py --list
 # play and record (1x by default; add --speed 16 to go fast)
 python collector/auto_replay.py --rows 0,1,2
 
-# turn captures into heatmaps, one per battle
+# pair each capture with the battle it was recorded during, then build
+python tools/backfill_source.py data/live/*/
 python tools/process_recording.py data/live/*/ --skip-existing
 
 # what has been recorded, and one heatmap per map+layout across every battle
@@ -207,6 +208,19 @@ Each of these cost real time; none are obvious.
   stretches the image by 20% and skews every track with it. `client_grid_size()`
   in `tools/process_recording.py` checks the tile first, then falls back to
   rejecting the whole-map shape when nothing is published to compare against.
+- **A capture made while playing has to be paired with its replay by time.**
+  `auto_replay.py` names its folders after the replay, but a capture made while
+  actually playing has no such name, and every one had to be pointed at its
+  replay by hand. A replay's file is written when the battle ends and its header
+  gives the battle's length, so the battle started at (write time - length), and
+  a recording of it starts within seconds: across eleven battles the right
+  replay was never more than 8 s out and the nearest wrong one never closer than
+  164 s. Two traps. The modification time has to come from the *original* copy --
+  copying a replay into `replays/` gives the copy a new one, which was enough to
+  pair 6 of 11 wrongly. And a match that is not clearly better than the
+  runner-up is refused rather than guessed, because a wrong pairing silently
+  mislabels a map. Verified by deleting all eleven hand-written `source.json`
+  files and reproducing them exactly.
 - **Count battles by `sessionId`, not by capture folder.** The same battle can
   be recorded more than once -- replaying a replay to test a change does exactly
   that. Two Berlin Conquest-2 captures on disk are one battle, session

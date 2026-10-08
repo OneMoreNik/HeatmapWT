@@ -345,7 +345,7 @@ def process(recording: Path, args) -> bool:
     source_path = recording / "source.json"
     if not source_path.exists():
         print(f"{recording}: no source.json, skipping "
-              f"(only recordings made by auto_replay carry one)")
+              f"(run tools/backfill_source.py to pair it with its replay)")
         return False
     source = json.loads(source_path.read_text(encoding="utf-8"))
     name = f"{layout_key(source['battleType'])[0]}-{layout_key(source['battleType'])[1]}"

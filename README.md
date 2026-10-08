@@ -20,6 +20,7 @@ the calibration chain and how each link was verified, and the traps.
 python collector/sync_replays.py                    # repo replays -> game folder
 python collector/auto_replay.py --list              # read from the files, no game
 python collector/auto_replay.py --rows 0,1,2        # play and record
+python tools/backfill_source.py data/live/*/        # pair captures with their battles
 python tools/process_recording.py data/live/*/      # tracks, plots, heatmaps, viewer
 python tools/build_map.py --list                    # what you have, per map
 python tools/build_map.py                           # one heatmap per map+layout
