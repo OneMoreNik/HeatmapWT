@@ -381,7 +381,22 @@ class Overlay:
                  x, y)
 
     def run(self) -> None:
-        self.root.mainloop()
+        """Run until Ctrl+C, which is how this is meant to be stopped.
+
+        Tk raises the interrupt out of its own event loop, so without catching
+        it here a perfectly normal "I am done playing" prints a traceback that
+        reads like a crash.
+        """
+        try:
+            self.root.mainloop()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
+        print("overlay stopped")
 
 
 class Calibrator:
@@ -476,7 +491,14 @@ class Calibrator:
             self.root.destroy()
 
     def run(self) -> None:
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        except KeyboardInterrupt:
+            print("cancelled, nothing saved")
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
 
 
 def main() -> int:
