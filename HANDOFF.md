@@ -87,7 +87,10 @@ python collector/auto_replay.py --list
 # play and record (1x by default; add --speed 16 to go fast)
 python collector/auto_replay.py --rows 0,1,2
 
-# pair each capture with the battle it was recorded during, then build
+# everything from "I stopped playing" to "the overlay has new heatmaps"
+python tools/update.py
+
+# or the same three steps separately
 python tools/backfill_source.py data/live/*/
 python tools/process_recording.py data/live/*/ --skip-existing
 
@@ -110,10 +113,10 @@ replay packet streams.
 2. **wrpl-inspector**, not vendored because it is AGPL:
    ```
    git clone https://github.com/maxsupermanhd/wrpl-inspector vendor/wrpl-inspector
-   cd vendor/wrpl-inspector && git apply ../patches/*.patch
+   cd vendor/wrpl-inspector; git apply ../patches/*.patch
    ```
    The patches are required; without them it cannot read current replays at all.
-3. Build each tool: `cd parser/wtcarve && go build -o ../../bin/wtcarve.exe .`,
+3. Build each tool: `cd parser/wtcarve; go build -o ../../bin/wtcarve.exe .`,
    and the same for `parser/wtresults`, `parser/wtlevel`, `parser/wtprobe`.
 4. If War Thunder is not at `D:/Games/WarThunder`, pass `--game` to
    `sync_replays.py` and `auto_replay.py`, and `-game` to `wtlevel.exe`.
@@ -208,6 +211,10 @@ Each of these cost real time; none are obvious.
   stretches the image by 20% and skews every track with it. `client_grid_size()`
   in `tools/process_recording.py` checks the tile first, then falls back to
   rejecting the whole-map shape when nothing is published to compare against.
+- **Windows PowerShell has no `&&`.** It is not a statement separator there, so
+  any instruction that chains commands with it fails on the machine this runs
+  on. `tools/update.py` exists so the normal path is one command rather than a
+  chain; where steps must be shown separately, they go on separate lines.
 - **A capture made while playing has to be paired with its replay by time.**
   `auto_replay.py` names its folders after the replay, but a capture made while
   actually playing has no such name, and every one had to be pointed at its
