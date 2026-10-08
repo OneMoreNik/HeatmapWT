@@ -211,6 +211,27 @@ Each of these cost real time; none are obvious.
   stretches the image by 20% and skews every track with it. `client_grid_size()`
   in `tools/process_recording.py` checks the tile first, then falls back to
   rejecting the whole-map shape when nothing is published to compare against.
+- **A map's square belongs to the map, not to each capture of it.** Captures
+  grouped by battle type are the same map and layout by construction, and track
+  positions are converted with `map_min`/`map_max`, never the grid -- so a
+  capture that opened on a transient grid still holds good tracks. Checking each
+  member's grid against the reference threw a real Berlin Conquest-2 battle out
+  of its own heatmap. The share of samples actually drawn is the guard instead,
+  and it is reported on every build.
+- **Take a combined map's geometry from the most authoritative capture, which
+  need not be one of the battles in it.** Deduplicating by session keeps the
+  capture with the most data; for Berlin Conquest-2 that is one which opened on
+  a transient 1700 m grid, and building on it lost Berlin's map image. Any
+  capture of the same battle type describes the same ground, so one whose grid
+  the client vouched for is preferred.
+- **The published map can be the wrong map.** `sinai_02` trims to `sinai`,
+  which exists and covers 1500 m, while the client reports 2400 m: not a
+  disagreement about one square but two different places. Drawing on it put 84%
+  of that battle off the edge, and `normandy_02` and
+  `lazzaro_italy_new_city` did the same -- the last matching `sun_city` on the
+  single shared word "city". A real grid no published mode comes close to now
+  means the name matched something else, and the image is dropped; one shared
+  word, or a filler word like "city" or "port", is no longer a match at all.
 - **Only rebuild the maps whose battles changed.** `build_map.py` redrew all
   nineteen layouts on every run, 219 s, growing with the collection -- while one
   battle changes exactly one map. A heatmap newer than every track that went

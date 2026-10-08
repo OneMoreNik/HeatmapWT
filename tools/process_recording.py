@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "collector"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from heatmapwt.layout import BATTLE_AREA, pick_areas  # noqa: E402
+from heatmapwt.layout import BATTLE_AREA, battle_area_centre, pick_areas  # noqa: E402
 from build_tracks import folder_start  # noqa: E402
 from fetch_maps import resolve_map_key  # noqa: E402
 
@@ -227,9 +227,26 @@ def client_square(info: dict, map_meta: dict | None
     return max(width, height), centre
 
 
+def published_sizes(maps_dir: Path, map_meta: dict | None) -> list[float]:
+    """Every size wt-tools publishes for this map, across all its modes."""
+    if not map_meta or not map_meta.get("map"):
+        return []
+    manifest_path = maps_dir / "manifest.json"
+    if not manifest_path.exists():
+        size = map_meta.get("size_m")
+        return [float(size)] if size else []
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    modes = manifest.get(map_meta["map"]) or {}
+    return [float(m["size"]) for m in modes.values()
+            if isinstance(m, dict) and m.get("size")]
+
+
 def resolve_geometry(source: dict, recording: Path, args
-                     ) -> tuple[Path, Path | None, float, tuple[float, float]] | None:
-    """(layout file, map image dir or None, square size, square centre).
+                     ) -> tuple[Path, Path | None, float, tuple[float, float], bool] | None:
+    """(layout, map image dir or None, square size, square centre, trusted).
+
+    `trusted` says the client's own grid was used rather than the published
+    size, which makes that answer the better one to build a combined map on.
 
     Everything that decides *where in the world* a battle gets drawn. Factored
     out so that combining several battles onto one map answers these questions
@@ -254,6 +271,14 @@ def resolve_geometry(source: dict, recording: Path, args
             return None
         return (max(float(grid[0]), float(grid[1])),
                 (zero[0] + float(grid[0]) / 2, zero[1] - float(grid[1]) / 2))
+
+    def whole_map_grid() -> bool:
+        mn, mx = info.get("map_min") or [], info.get("map_max") or []
+        if len(grid) < 2 or len(zero) < 2 or len(mn) < 2 or len(mx) < 2:
+            return False
+        return (abs((mx[0] - mn[0]) - float(grid[0])) < 1.0
+                and abs((mx[1] - mn[1]) - float(grid[1])) < 1.0
+                and abs(zero[0] - mn[0]) < 1.0 and abs(zero[1] - mx[1]) < 1.0)
 
     square = client_square(info, map_meta)
     # The client reports exactly which square it drew. Take its centre as well
@@ -281,6 +306,22 @@ def resolve_geometry(source: dict, recording: Path, args
             if fallback:
                 size_m, centre = fallback
 
+    # A published map can be the wrong map. `sinai_02` trims to `sinai`, which
+    # exists and covers 1500 m, while the client reports a 2400 m grid: not a
+    # disagreement about one square but two different places, and drawing on it
+    # put 84% of that battle off the edge. A real grid that no published mode
+    # comes close to means the name matched something else.
+    if (map_dir is not None and square is None and not whole_map_grid()
+            and len(grid) >= 1 and grid[0]):
+        published = published_sizes(args.maps, map_meta)
+        live = max(float(grid[0]), float(grid[1]) if len(grid) > 1 else 0.0)
+        if published and min(abs(p - live) for p in published) / live > 0.15:
+            print(f"  this grid is {live:.0f} m and {map_meta.get('map')} is "
+                  f"published at {'/'.join(f'{p:.0f}' for p in sorted(set(published)))} m; "
+                  f"too far apart to be the same square, so drawing the client's "
+                  f"grid instead")
+            map_dir, map_meta = None, None
+
     if map_dir is None:
         # wt-tools publishes 62 maps, not all of them. The client reports the
         # playable square as grid_size, and its centre matches the mission's
@@ -297,7 +338,23 @@ def resolve_geometry(source: dict, recording: Path, args
         else:
             print("  no map image and no usable grid size; cannot continue")
             return None
-    return layout, map_dir, size_m, centre
+
+    # Always answer with the square that will actually be drawn, never "no
+    # override". Two battles on one map can arrive here by different routes --
+    # one trusting the client's grid, the other the published size on the
+    # mission's battle area -- and still describe the same square to within
+    # 3 cm. Returning None for the second made them look like different places,
+    # and a real Berlin Domination battle was dropped from Berlin's own heatmap
+    # in favour of an older capture.
+    if size_m is None:
+        size_m = (map_meta or {}).get("size_m")
+    if centre is None:
+        centre = battle_area_centre(
+            json.loads(Path(layout).read_text(encoding="utf-8")))
+    if not size_m or centre is None:
+        print("  no size or centre for this map; cannot continue")
+        return None
+    return layout, map_dir, size_m, centre, square is not None
 
 
 def render_set(tracks, layout, map_dir, size_m, centre, prefix, heatmaps,
@@ -359,7 +416,7 @@ def process(recording: Path, args) -> bool:
     resolved = resolve_geometry(source, recording, args)
     if resolved is None:
         return False
-    layout, map_dir, size_m, centre = resolved
+    layout, map_dir, size_m, centre, _ = resolved
 
     speed = source.get("speed", 1)
     group = battle_group(recording)

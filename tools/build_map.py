@@ -33,10 +33,6 @@ from process_recording import (  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# Two squares this far apart are not the same battlefield.
-SQUARE_TOLERANCE_M = 5.0
-
-
 def fingerprint(info: dict) -> list[float] | None:
     """Everything `map_info` says about the shape of the map, as one key.
 
@@ -91,28 +87,6 @@ def fingerprints_for(live: Path, battle_types: list[str]) -> list[list[float]]:
     return out
 
 
-def describe(size_m: float | None, centre: tuple[float, float] | None) -> str:
-    if size_m is None:
-        return "the published size on the mission's battle area"
-    return f"{size_m:.0f} m at ({centre[0]:.0f}, {centre[1]:.0f})"
-
-
-def same_square(size_a, centre_a, size_b, centre_b) -> bool:
-    """Whether two battles were drawn on the same square.
-
-    None means "no override": the published size, centred on the mission's
-    battle area. Two battles that both say that agree, because the answer comes
-    from the same files either way.
-    """
-    if size_a is None or size_b is None:
-        return (size_a is None) == (size_b is None)
-    if abs(size_a - size_b) > SQUARE_TOLERANCE_M:
-        return False
-    if centre_a is None or centre_b is None:
-        return (centre_a is None) == (centre_b is None)
-    return max(abs(a - b) for a, b in zip(centre_a, centre_b)) <= SQUARE_TOLERANCE_M
-
-
 def collect(live: Path) -> dict[str, list[tuple[Path, dict]]]:
     """Distinct battles, grouped by battle type, oldest first.
 
@@ -162,6 +136,38 @@ def by_map(groups: dict[str, list[tuple[Path, dict]]]
     return merged
 
 
+def geometry_for(battle_types: list[str], members, args):
+    """Where to draw this map, taken from the most authoritative capture.
+
+    Not necessarily one of the battles being combined. Deduplicating by session
+    keeps the capture with the most data, which for Berlin Conquest-2 is one
+    that opened on a transient 1700 m grid; building on that lost Berlin's map
+    image. Any capture of the same battle type describes the same ground, so a
+    capture whose own grid the client vouched for is preferred -- even one whose
+    tracks were never built.
+    """
+    seen = {recording.name for recording, _ in members}
+    candidates = [(recording, source) for recording, source in members]
+    for source_path in sorted(args.live.glob("*/source.json")):
+        if source_path.parent.name in seen:
+            continue
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        if source.get("battleType") in battle_types:
+            candidates.append((source_path.parent, source))
+
+    fallback = None
+    for recording, source in candidates:
+        if not (recording / "map_info.json").exists():
+            continue
+        resolved = resolve_geometry(source, recording, args)
+        if resolved is None:
+            continue
+        if resolved[4]:
+            return resolved
+        fallback = fallback or resolved
+    return fallback
+
+
 def build(key: str, members: list[tuple[Path, dict]], args,
           whole_map: bool = False) -> bool:
     # In --by-map the key is a bare map name, which must not go through
@@ -190,24 +196,24 @@ def build(key: str, members: list[tuple[Path, dict]], args,
     # Geometry comes from the first battle; the rest have to agree with it.
     # They always should, but a mission can be reworked between patches, and
     # silently averaging two different squares would be invisible in the output.
-    first_recording, first_source = members[0]
-    resolved = resolve_geometry(first_source, first_recording, args)
+    types = []
+    for _, source in members:
+        if source.get("battleType") not in types:
+            types.append(source.get("battleType"))
+    resolved = geometry_for(types, members, args)
     if resolved is None:
         return False
-    layout, map_dir, size_m, centre = resolved
+    layout, map_dir, size_m, centre, _ = resolved
 
-    tracks = []
-    for recording, source in members:
-        other = resolve_geometry(source, recording, args)
-        if other is None:
-            continue
-        _, _, other_size, other_centre = other
-        if not same_square(size_m, centre, other_size, other_centre):
-            print(f"  skipping {recording.name}: its square is "
-                  f"{describe(other_size, other_centre)} rather than "
-                  f"{describe(size_m, centre)}")
-            continue
-        tracks.append(recording / "tracks.csv")
+    # Every member is the same map and layout -- that is what grouped them --
+    # so they share a square, and each one's own grid metadata is beside the
+    # point. Positions are converted with map_min/map_max, not the grid, so a
+    # capture that opened on a transient grid still holds good tracks; checking
+    # each member's grid against the reference threw a real Berlin Conquest-2
+    # battle out of its own heatmap. The share of samples actually drawn,
+    # reported below, is what catches a square that genuinely does not fit.
+    tracks = [recording / "tracks.csv" for recording, _ in members
+              if (recording / "tracks.csv").exists()]
 
     if not tracks:
         print("  nothing to combine")
@@ -218,10 +224,6 @@ def build(key: str, members: list[tuple[Path, dict]], args,
         # What the client reported for each battle that went in, so the overlay
         # can recognise this map from the live endpoint rather than guessing
         # from the shape of its square.
-        types = []
-        for _, source in members:
-            if source.get("battleType") not in types:
-                types.append(source.get("battleType"))
         prints = fingerprints_for(args.live, types)
         (args.heatmaps / f"{prefix}.index.json").write_text(json.dumps({
             "prefix": prefix,

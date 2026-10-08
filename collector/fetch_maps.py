@@ -89,11 +89,21 @@ def resolve_map_key(manifest: dict, name: str) -> str | None:
 
     # "battle_of_hurtgen_forest" contains "hurtgen"; prefer the longest match
     # so "poland" does not win over "fields_of_poland" for "poland_fields".
-    wordset = set(words)
-    matches = [k for k in manifest if wordset & set(k.split("_"))]
-    if matches:
-        return max(matches, key=lambda k: len(wordset & set(k.split("_"))))
-    return None
+    #
+    # One shared word is not a match. "lazzaro_italy_new_city" and "sun_city"
+    # share only "city", and taking that drew an Italian town on a desert map.
+    # Short filler words are ignored for the same reason.
+    filler = {"of", "the", "new", "old", "city", "town", "port", "field",
+              "fields", "river", "base", "north", "south", "east", "west"}
+    wordset = {w for w in words if len(w) > 2}
+    best, best_score = None, 0
+    for key in manifest:
+        shared = wordset & set(key.split("_"))
+        strong = shared - filler
+        score = len(strong) * 2 + len(shared)
+        if strong and score > best_score:
+            best, best_score = key, score
+    return best
 
 
 def png_size(data: bytes) -> tuple[int, int] | None:
