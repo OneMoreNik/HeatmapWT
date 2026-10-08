@@ -19,14 +19,18 @@ average two different battles together.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
+import re
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from heatmapwt.layout import spawns  # noqa: E402
 from process_recording import (  # noqa: E402
     layout_key, render_set, resolve_geometry)
 
@@ -136,6 +140,49 @@ def by_map(groups: dict[str, list[tuple[Path, dict]]]
     return merged
 
 
+# "briefing_dom_t1_tank_spawn_01_hardcore" -> "t1"
+TEAM = re.compile(r"(?:^|_)(t\d)(?:_|$)")
+
+
+def spawn_side(tracks_path: Path, layout_path: Path) -> str | None:
+    """Which team's spawn this battle's vehicles started from, or None.
+
+    A live capture only ever sees the recording player's own team, so one
+    battle covers one side of the map and nothing of the other. Which side that
+    was is not in the results -- the team numbers there do not line up with the
+    mission's t1 and t2 -- so it is read off the ground: every track's first
+    position is a spawn, and they agree almost perfectly, 100% of tracks in most
+    battles recorded so far.
+    """
+    try:
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    areas = [a for a in spawns(layout) if TEAM.search(a.get("name", "").lower())]
+    if not areas:
+        return None
+
+    starts: dict[str, tuple[float, float, float]] = {}
+    try:
+        with open(tracks_path, newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                key, t = row["track_id"], float(row["t"])
+                if key not in starts or t < starts[key][0]:
+                    starts[key] = (t, float(row["world_x"]), float(row["world_z"]))
+    except (OSError, KeyError, ValueError):
+        return None
+    if not starts:
+        return None
+
+    votes = Counter()
+    for _, x, z in starts.values():
+        nearest = min(areas, key=lambda a: math.hypot(x - a["x"], z - a["z"]))
+        found = TEAM.search(nearest["name"].lower())
+        if found:
+            votes[found.group(1)] += 1
+    return votes.most_common(1)[0][0] if votes else None
+
+
 def geometry_for(battle_types: list[str], members, args):
     """Where to draw this map, taken from the most authoritative capture.
 
@@ -218,19 +265,36 @@ def build(key: str, members: list[tuple[Path, dict]], args,
     if not tracks:
         print("  nothing to combine")
         return False
+    # Written before the heatmaps, because build_viewer reads it to say which
+    # side of the map these battles were played from. Writing it afterwards
+    # left every viewer quoting the previous run.
+    #
+    # The fingerprints are what the client reported for each battle that went
+    # in, so the overlay can recognise this map from the live endpoint rather
+    # than guessing from the shape of its square.
+    sides = [side for side in (spawn_side(t, Path(layout)) for t in tracks) if side]
+    if sides:
+        tally = Counter(sides)
+        summary = ", ".join(
+            f"{count} battle{'s' if count != 1 else ''} from {team}"
+            for team, count in sorted(tally.items()))
+        print(f"  spawned from: {summary}")
+        if len(tally) == 1:
+            print("  only one side of this map has been recorded -- a live "
+                  "capture sees your own team only")
+    (args.heatmaps / f"{prefix}.index.json").write_text(json.dumps({
+        "prefix": prefix,
+        "battle_types": types,
+        "whole_map": whole_map,
+        "fingerprints": fingerprints_for(args.live, types),
+        # One battle covers one side. Recording this lets the viewer say so,
+        # rather than leaving an empty half looking like quiet ground.
+        "sides": sorted(Counter(sides).items()) if sides else [],
+    }, indent=2), encoding="utf-8")
+
     made = render_set(tracks, layout, map_dir, size_m, centre, prefix,
                       args.heatmaps, battle_type)
     if made:
-        # What the client reported for each battle that went in, so the overlay
-        # can recognise this map from the live endpoint rather than guessing
-        # from the shape of its square.
-        prints = fingerprints_for(args.live, types)
-        (args.heatmaps / f"{prefix}.index.json").write_text(json.dumps({
-            "prefix": prefix,
-            "battle_types": types,
-            "whole_map": whole_map,
-            "fingerprints": prints,
-        }, indent=2), encoding="utf-8")
         sidecar = args.heatmaps / f"{prefix}-all.json"
         if sidecar.exists():
             counts = json.loads(sidecar.read_text(encoding="utf-8")).get("counts", {})

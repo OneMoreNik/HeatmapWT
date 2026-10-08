@@ -211,6 +211,16 @@ Each of these cost real time; none are obvious.
   stretches the image by 20% and skews every track with it. `client_grid_size()`
   in `tools/process_recording.py` checks the tile first, then falls back to
   rejecting the whole-map shape when nothing is published to compare against.
+- **One battle covers one side of the map, and only one.** A live capture sees
+  the recording player's own team and nothing else, so a map played once holds
+  that team's movement and nothing of the other half -- which reads as quiet
+  ground rather than as ground nobody watched. Of 22 layouts recorded so far,
+  only Israel has been played from both sides. Which side cannot be read from
+  the results: the team numbers there do not line up with the mission's t1 and
+  t2, and Israel has `authorTeam` 1 spawning at t2 and `authorTeam` 2 at t1. It
+  is read off the ground instead -- every track's first position is a spawn, and
+  they agree almost perfectly, 100% of tracks in most battles. `build_map.py`
+  records it and the viewer says so on the page.
 - **A map's square belongs to the map, not to each capture of it.** Captures
   grouped by battle type are the same map and layout by construction, and track
   positions are converted with `map_min`/`map_max`, never the grid -- so a

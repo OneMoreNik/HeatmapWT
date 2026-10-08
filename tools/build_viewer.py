@@ -34,6 +34,26 @@ def data_uri(path: Path) -> str:
     return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
+def side_note(heatmaps: Path, prefix: str) -> str:
+    """One line on which side of the map these battles were played from.
+
+    A live capture only sees the recording player's own team, so a map played
+    from one side has nothing at all on the other. Without saying so, that empty
+    half reads as quiet ground rather than as ground nobody watched.
+    """
+    index_path = heatmaps / f"{prefix}.index.json"
+    if not index_path.exists():
+        return ""
+    sides = json.loads(index_path.read_text(encoding="utf-8")).get("sides") or []
+    if not sides:
+        return ""
+    parts = ", ".join(f"{count} from {team}" for team, count in sides)
+    if len(sides) == 1:
+        return (f"Spawn side: {parts}. A capture only ever sees your own team, so "
+                f"the other half of this map is unrecorded, not empty.")
+    return f"Spawn sides: {parts}. Both sides of the map are represented."
+
+
 def build(map_dir: Path, heatmaps: Path, prefix: str) -> str:
     meta_path = map_dir / "map.json" if map_dir else None
     map_meta = json.loads(meta_path.read_text()) if meta_path and meta_path.exists() else {}
@@ -70,6 +90,7 @@ def build(map_dir: Path, heatmaps: Path, prefix: str) -> str:
         for l in layers)
     stats = json.dumps({l["key"]: {"battles": l["battles"], "vehicles": l["vehicles"],
                                    "seconds": l["seconds"]} for l in layers})
+    note = side_note(heatmaps, prefix)
 
     return f"""<!DOCTYPE html>
 <meta charset="utf-8">
@@ -98,6 +119,8 @@ def build(map_dir: Path, heatmaps: Path, prefix: str) -> str:
   .heat.on {{ opacity:var(--heat-opacity, .55); }}
   footer {{ padding:0 20px 28px; color:var(--muted); font-size:12.5px; max-width:70ch; }}
   .legend {{ display:flex; align-items:center; gap:8px; margin-top:8px; }}
+  .note {{ margin-top:12px; padding:9px 12px; border-left:3px solid #4ad0ff;
+           background:#161d25; color:#c8d4de; }}
   .bar {{ height:9px; width:190px; border-radius:5px;
           background:linear-gradient(90deg,#28469b,#3cb4c8,#5ad26e,#f0c83c,#f04632); }}
 </style>
@@ -124,6 +147,7 @@ def build(map_dir: Path, heatmaps: Path, prefix: str) -> str:
   number of samples taken. Routes keep only moving vehicles, Stops only
   near-stationary ones.
   <div class="legend"><span>low</span><span class="bar"></span><span>high</span></div>
+  {f'<p class="note">{html.escape(note)}</p>' if note else ''}
 </footer>
 
 <script>
