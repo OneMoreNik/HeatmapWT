@@ -173,6 +173,18 @@ def build(key: str, members: list[tuple[Path, dict]], args,
         map_name, layout_name = layout_key(key)
         prefix = f"{map_name}-{layout_name}-all"
     battle_type = members[0][1]["battleType"]
+
+    # Rebuilding every map after every battle costs 219 s across nineteen of
+    # them and grows with the collection, while one battle changes exactly one
+    # map. A heatmap newer than every track that went into it is already right.
+    viewer = args.heatmaps / f"{prefix}.html"
+    index = args.heatmaps / f"{prefix}.index.json"
+    if not args.rebuild and viewer.exists() and index.exists():
+        inputs = [recording / "tracks.csv" for recording, _ in members]
+        newest = max((p.stat().st_mtime for p in inputs if p.exists()), default=0)
+        if viewer.stat().st_mtime >= newest:
+            return None
+
     print(f"{key}  ({len(members)} battle{'s' if len(members) != 1 else ''})")
 
     # Geometry comes from the first battle; the rest have to agree with it.
@@ -244,6 +256,9 @@ def main() -> int:
                         help="skip layouts with fewer battles than this")
     parser.add_argument("--list", action="store_true",
                         help="show what has been recorded, and build nothing")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="redo every map, even ones whose battles have not "
+                             "changed since they were last built")
     parser.add_argument("--by-map", action="store_true",
                         help="combine every layout of a map into one heatmap. Mixes "
                              "game modes, so the capture points no longer agree, but "
@@ -282,7 +297,7 @@ def main() -> int:
         return 0
 
     wanted = args.battle_types or sorted(groups)
-    built = 0
+    built = fresh = 0
     for battle_type in wanted:
         members = groups.get(battle_type)
         if not members:
@@ -291,8 +306,15 @@ def main() -> int:
             continue
         if len(members) < args.min_battles:
             continue
-        built += build(battle_type, members, args, args.by_map)
-    print(f"\n{built} combined heatmap{'s' if built != 1 else ''} in {args.heatmaps}")
+        outcome = build(battle_type, members, args, args.by_map)
+        if outcome is None:
+            fresh += 1
+        else:
+            built += outcome
+    summary = f"{built} combined heatmap{'s' if built != 1 else ''} in {args.heatmaps}"
+    if fresh:
+        summary += f", {fresh} already up to date"
+    print("\n" + summary)
     return 0
 
 

@@ -211,6 +211,13 @@ Each of these cost real time; none are obvious.
   stretches the image by 20% and skews every track with it. `client_grid_size()`
   in `tools/process_recording.py` checks the tile first, then falls back to
   rejecting the whole-map shape when nothing is published to compare against.
+- **Only rebuild the maps whose battles changed.** `build_map.py` redrew all
+  nineteen layouts on every run, 219 s, growing with the collection -- while one
+  battle changes exactly one map. A heatmap newer than every track that went
+  into it is already right, so it is left alone: a run after a battle went from
+  219 s to 13, and one with nothing new to 0.3. `--rebuild` forces the old
+  behaviour, which is what to use after changing how heatmaps are drawn, since
+  that changes the output without touching any input.
 - **Windows PowerShell has no `&&`.** It is not a statement separator there, so
   any instruction that chains commands with it fails on the machine this runs
   on. `tools/update.py` exists so the normal path is one command rather than a
