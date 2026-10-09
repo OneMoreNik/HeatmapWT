@@ -45,6 +45,19 @@ KEY_MS = 40
 
 CLASSES = ["all", "heavy", "medium", "light", "td", "spaa", "routes", "stops"]
 
+# What the label says while a layer is up. The point of the label is to
+# answer "what am I looking at", which the map name and battle count do not.
+LABELS = {
+    "all": "All vehicles",
+    "heavy": "Heavy tanks",
+    "medium": "Medium tanks",
+    "light": "Light tanks",
+    "td": "Tank destroyers",
+    "spaa": "SPAA",
+    "routes": "Routes - where they drive",
+    "stops": "Stops - where they sit",
+}
+
 # Grid numbers come from the same source on both sides, so they should agree
 # exactly; this only absorbs float noise.
 FINGERPRINT_TOLERANCE_M = 1.0
@@ -68,6 +81,7 @@ DEFAULT_CONFIG = {
 }
 
 VK_CONTROL = 0x11
+VK_SHIFT = 0x10
 
 
 def config_path() -> Path:
@@ -227,7 +241,7 @@ class Overlay:
         self.mode: str | None = None
         self.candidate: str | None = None
         self.image = None
-        self.pressed: dict[str, bool] = {}
+        self.pressed: dict[tuple[str, bool], bool] = {}
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -266,17 +280,20 @@ class Overlay:
             user32.SetWindowLongW(handle, GWL_EXSTYLE,
                                   style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
 
-    def chord(self, key: str) -> bool:
-        """True on the frame Ctrl+<key> goes down.
+    def chord(self, key: str, shift: bool = False) -> bool:
+        """True on the frame Ctrl+<key> goes down, with or without Shift.
 
         Polled rather than registered as a system hotkey so the key still
         reaches the game: nothing is swallowed, and nothing is injected.
         """
         user32 = ctypes.windll.user32
-        down = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000) and \
-            bool(user32.GetAsyncKeyState(ord(key)) & 0x8000)
-        fired = down and not self.pressed.get(key, False)
-        self.pressed[key] = down
+        held = (bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+                and bool(user32.GetAsyncKeyState(ord(key)) & 0x8000))
+        # Shift is part of the chord rather than ignored, or Ctrl+Shift+R would
+        # fire Ctrl+R too and step forward and back in the same frame.
+        down = held and bool(user32.GetAsyncKeyState(VK_SHIFT) & 0x8000) == shift
+        fired = down and not self.pressed.get((key, shift), False)
+        self.pressed[(key, shift)] = down
         return fired
 
     # --- state ------------------------------------------------------------
@@ -317,7 +334,9 @@ class Overlay:
         elif self.chord(keys["minimap"]):
             self.toggle("minimap")
         elif self.chord(keys["cycle"]):
-            self.cycle()
+            self.cycle(1)
+        elif self.chord(keys["cycle"], shift=True):
+            self.cycle(-1)
         elif self.chord(keys["hide"]):
             self.hide()
         self.root.after(KEY_MS, self.poll_keys)
@@ -333,9 +352,9 @@ class Overlay:
         else:
             self.show(mode)
 
-    def cycle(self) -> None:
+    def cycle(self, step: int = 1) -> None:
         if self.entry and self.mode:
-            self.class_index += 1
+            self.class_index += step
             self.show(self.mode)
 
     def hide(self) -> None:
@@ -355,14 +374,15 @@ class Overlay:
         if self.entry is None:
             self.library.reload()
             self.root.withdraw()
-            self.say("HeatmapWT: no heatmap for this map "
-                     "(nothing recorded here yet, or no battle running)", x, y)
+            # Short, but not silent: a hotkey that does nothing at all reads as
+            # the overlay being broken rather than the map being unrecorded.
+            self.say("no data for this map", x, y)
             return
 
         vclass = self.current_class()
         source = self.library.heatmaps / f"{self.entry['prefix']}-{vclass}.png"
         if not source.exists():
-            self.say(f"HeatmapWT: {source.name} is missing", x, y)
+            self.say(f"{LABELS.get(vclass, vclass)}: not built for this map", x, y)
             return
 
         scaled = fit(source, width, height, self.cache)
@@ -374,11 +394,7 @@ class Overlay:
         self.root.deiconify()
         self.root.lift()
 
-        battles = self.entry["battles"]
-        self.say(f"{self.entry['prefix'].replace('-', ' ')}  ·  {vclass}  ·  "
-                 f"{battles} battle{'s' if battles != 1 else ''}"
-                 f"{'  — one battle is not a pattern' if battles < 3 else ''}",
-                 x, y)
+        self.say(LABELS.get(vclass, vclass), x, y)
 
     def run(self) -> None:
         """Run until Ctrl+C, which is how this is meant to be stopped.

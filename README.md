@@ -25,7 +25,8 @@ python tools/backfill_source.py data/live/*/        # ...or the steps separately
 python tools/process_recording.py data/live/*/      # tracks, plots, heatmaps, viewer
 python tools/build_map.py --list                    # what you have, per map
 python tools/build_map.py                           # one heatmap per map+layout
-python overlay/overlay.py                           # Ctrl+Q / Ctrl+E over the game
+python overlay/overlay.py                           # Ctrl+Q / Ctrl+E over the game,
+                                                   # Ctrl+R cycles the layer
 ```
 
 Two things are not solved. **Enemy vehicles never appear** — the client's map

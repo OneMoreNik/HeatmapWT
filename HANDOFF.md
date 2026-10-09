@@ -508,10 +508,17 @@ python overlay/overlay.py --calibrate minimap
 python overlay/overlay.py                       # then leave it running
 ```
 
-    Ctrl+Q   over the big pre-battle tactical map
-    Ctrl+E   over the minimap
-    Ctrl+R   next vehicle class
-    Ctrl+D   hide
+    Ctrl+Q         over the big pre-battle tactical map
+    Ctrl+E         over the minimap
+    Ctrl+R         next layer, Ctrl+Shift+R the previous one
+    Ctrl+D         hide
+
+Eight layers cycle in order: All vehicles, Heavy, Medium, Light, Tank
+destroyers, SPAA, Routes (moving only) and Stops (near-stationary only). The
+label above the overlay names the layer and nothing else -- which map it is and
+how many battles are behind it are answerable by looking at the screen, while
+"what am I looking at" is not. The battle count and the spawn-side note live on
+the viewer page instead.
 
 It picks the map itself, from `map_info.json`.
 
